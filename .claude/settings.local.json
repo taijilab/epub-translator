@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(open:*)",
+      "mcp__web-search-prime__webSearchPrime",
+      "mcp__web-reader__webReader"
+    ]
+  }
+}
