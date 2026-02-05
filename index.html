@@ -670,6 +670,9 @@
                 return;
             }
 
+            // 清空之前的数据
+            resetAllData();
+
             epubFile = file;
             fileName.textContent = file.name;
             fileSize.textContent = formatFileSize(file.size);
@@ -681,6 +684,47 @@
 
             // 分析文件内容
             await analyzeEpubContent();
+        }
+
+        // 清空所有数据
+        function resetAllData() {
+            // 清空日志
+            progressLog.innerHTML = '';
+
+            // 重置进度
+            updateProgress('', 0);
+
+            // 重置Token统计
+            resetTokenCount();
+
+            // 重置字数统计
+            totalCharsToTranslate = 0;
+            translatedChars = 0;
+
+            // 清空对比窗口
+            if (originalTextDiv) originalTextDiv.textContent = '';
+            if (translatedTextDiv) translatedTextDiv.textContent = '';
+
+            // 隐藏下载区域
+            downloadArea.classList.add('hidden');
+
+            // 隐藏进度区域
+            progressArea.classList.add('hidden');
+
+            // 重置翻译按钮
+            translateBtn.classList.remove('hidden');
+            cancelBtn.classList.add('hidden');
+
+            // 重置竖排转换选项
+            const convertCheckbox = document.getElementById('convertToHorizontal');
+            if (convertCheckbox) {
+                convertCheckbox.checked = false;
+            }
+
+            // 重置状态
+            isTranslating = false;
+            shouldCancel = false;
+            translatedEpub = null;
         }
 
         function handleRemoveFile() {
