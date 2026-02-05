@@ -1613,9 +1613,9 @@
 
             addLog(`找到 ${paragraphs.length} 个段落`);
 
-            // 智能合并：每200-300字一组，但记住段落边界
-            const TARGET_MIN_LENGTH = 200;
-            const TARGET_MAX_LENGTH = 300;
+            // 智能合并：每300-500字一组，减少API调用次数
+            const TARGET_MIN_LENGTH = 300;
+            const TARGET_MAX_LENGTH = 500;
             const groupedParagraphs = [];
             let currentBatch = [];
             let currentLength = 0;
@@ -1672,7 +1672,7 @@
             addLog(`智能合并: ${paragraphs.length} 个段落 → ${groupedParagraphs.length} 个翻译组`);
 
             // 分段并发翻译
-            const CONCURRENT_BATCHES = 15; // 增加并发数，因为现在每个单元更小
+            const CONCURRENT_BATCHES = 30; // 提高并发数，提升翻译速度
             let translatedCount = 0;
             const maxRetries = 3;
 
@@ -1782,7 +1782,9 @@ ${originalText}`;
                             if (retries >= maxRetries) {
                                 return { success: false, error: error.message };
                             }
-                            await new Promise(resolve => setTimeout(resolve, 1000 * retries));
+                            // 指数退避：第1次500ms，第2次1000ms，第3次2000ms
+                            const backoffDelay = Math.min(500 * Math.pow(2, retries - 1), 2000);
+                            await new Promise(resolve => setTimeout(resolve, backoffDelay));
                         }
                     }
 
@@ -1809,9 +1811,10 @@ ${originalText}`;
                 updateProgress(`翻译中...`, progress);
                 addLog(`翻译进度: ${translatedCount}/${paragraphs.length} 段完成 (${progress}%) - 已处理 ${batchEnd}/${groupedParagraphs.length} 组`);
 
-                if (batchEnd < groupedParagraphs.length) {
-                    await new Promise(resolve => setTimeout(resolve, 200));
-                }
+                // 移除批次间延迟，提升速度
+                // if (batchEnd < groupedParagraphs.length) {
+                //     await new Promise(resolve => setTimeout(resolve, 50));
+                // }
             }
 
             addLog(`✓ 翻译完成！共翻译 ${translatedCount} 个段落`);
@@ -2018,9 +2021,9 @@ ${originalText}`;
 
             addLog(`找到 ${paragraphs.length} 个段落`);
 
-            // 智能合并：每200-300字一组，但记住段落边界
-            const TARGET_MIN_LENGTH = 200;
-            const TARGET_MAX_LENGTH = 300;
+            // 智能合并：每300-500字一组，减少API调用次数
+            const TARGET_MIN_LENGTH = 300;
+            const TARGET_MAX_LENGTH = 500;
             const groupedParagraphs = [];
             let currentBatch = [];
             let currentLength = 0;
@@ -2077,7 +2080,7 @@ ${originalText}`;
             addLog(`智能合并: ${paragraphs.length} 个段落 → ${groupedParagraphs.length} 个翻译组`);
 
             // 分段并发翻译
-            const CONCURRENT_BATCHES = 15; // 增加并发数，因为现在每个单元更小
+            const CONCURRENT_BATCHES = 30; // 提高并发数，提升翻译速度
             let translatedCount = 0;
             const maxRetries = 3;
 
