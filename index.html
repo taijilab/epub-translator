@@ -1551,78 +1551,125 @@
                 'pt': '葡萄牙语'
             };
 
-            // 使用DOMParser解析HTML（仅用于提取文本节点位置）
+            // 使用DOMParser解析HTML
             const parser = new DOMParser();
             const doc = parser.parseFromString(text, 'text/html');
 
-            // 使用TreeWalker提取所有文本节点，避免重复
+            // 提取段落文本，保持原文结构
             const paragraphs = [];
-            const walker = document.createTreeWalker(
-                doc.body,
-                NodeFilter.SHOW_TEXT,
-                {
-                    acceptNode: function(node) {
-                        const textContent = node.textContent;
 
-                        // 跳过空白节点
-                        if (!textContent || !textContent.trim()) {
-                            return NodeFilter.FILTER_REJECT;
-                        }
+            // 查找所有包含文本的块级元素
+            const blockElements = doc.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre');
 
-                        // 跳过script和style标签内的文本
-                        const parent = node.parentElement;
-                        if (parent) {
-                            const tagName = parent.tagName.toUpperCase();
-                            if (tagName === 'SCRIPT' || tagName === 'STYLE') {
+            if (blockElements.length > 0) {
+                // 使用块级元素作为段落边界
+                blockElements.forEach((element, index) => {
+                    const text = element.textContent.trim();
+                    if (text.length >= 1 && !/^[0-9\s\p{P}\p{S}]+$/u.test(text)) {
+                        paragraphs.push({
+                            element: element,
+                            originalText: text,
+                            index: index
+                        });
+                    }
+                });
+            } else {
+                // 如果没有块级元素，使用文本节点
+                const walker = document.createTreeWalker(
+                    doc.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: function(node) {
+                            const textContent = node.textContent;
+                            if (!textContent || !textContent.trim()) {
                                 return NodeFilter.FILTER_REJECT;
                             }
+                            const parent = node.parentElement;
+                            if (parent) {
+                                const tagName = parent.tagName.toUpperCase();
+                                if (tagName === 'SCRIPT' || tagName === 'STYLE') {
+                                    return NodeFilter.FILTER_REJECT;
+                                }
+                            }
+                            return NodeFilter.FILTER_ACCEPT;
                         }
+                    },
+                    false
+                );
 
-                        // 只处理有一定长度的文本（至少1个字符）
-                        if (textContent.trim().length < 1) {
-                            return NodeFilter.FILTER_REJECT;
-                        }
-
-                        return NodeFilter.FILTER_ACCEPT;
+                let node;
+                let index = 0;
+                while (node = walker.nextNode()) {
+                    const originalText = node.textContent.trim();
+                    if (originalText.length >= 1 && !/^[0-9\s\p{P}\p{S}]+$/u.test(originalText)) {
+                        paragraphs.push({
+                            textNode: node,
+                            originalText: originalText,
+                            index: index++
+                        });
                     }
-                },
-                false
-            );
-
-            let node;
-            let index = 0;
-            while (node = walker.nextNode()) {
-                const originalText = node.textContent.trim();
-
-                // 只处理有一定长度的文本（至少1个字符）
-                if (originalText.length >= 1) {
-                    paragraphs.push({
-                        textNode: node,
-                        originalText: originalText,
-                        text: originalText,
-                        index: index++
-                    });
                 }
             }
 
-            addLog(`找到 ${paragraphs.length} 个文本节点`);
+            addLog(`找到 ${paragraphs.length} 个段落`);
 
-            // 改进的段落处理：保持原文排版风格
-            // 策略：按HTML块级元素边界分组，而不是简单按长度合并
+            // 智能合并：每200-300字一组，但记住段落边界
+            const TARGET_MIN_LENGTH = 200;
+            const TARGET_MAX_LENGTH = 300;
             const groupedParagraphs = [];
+            let currentBatch = [];
+            let currentLength = 0;
 
             for (let i = 0; i < paragraphs.length; i++) {
                 const para = paragraphs[i];
+                const textLength = para.originalText.length;
 
-                // 每个文本节点单独作为一组，保持原文结构
+                // 如果单个段落就超过300字，单独处理
+                if (textLength > TARGET_MAX_LENGTH) {
+                    // 先保存之前累积的
+                    if (currentBatch.length > 0) {
+                        groupedParagraphs.push({
+                            paragraphs: currentBatch,
+                            combinedText: currentBatch.map(p => p.originalText).join('\n\n'),
+                            count: currentBatch.length
+                        });
+                        currentBatch = [];
+                        currentLength = 0;
+                    }
+                    // 长段落单独成组
+                    groupedParagraphs.push({
+                        paragraphs: [para],
+                        combinedText: para.originalText,
+                        count: 1
+                    });
+                } else {
+                    // 累积小段落
+                    currentBatch.push(para);
+                    currentLength += textLength;
+
+                    // 如果达到目标长度或批次够多，保存
+                    if (currentLength >= TARGET_MIN_LENGTH || currentBatch.length >= 10) {
+                        groupedParagraphs.push({
+                            paragraphs: currentBatch,
+                            combinedText: currentBatch.map(p => p.originalText).join('\n\n'),
+                            count: currentBatch.length
+                        });
+                        currentBatch = [];
+                        currentLength = 0;
+                    }
+                }
+            }
+
+            // 保存剩余的
+            if (currentBatch.length > 0) {
                 groupedParagraphs.push({
-                    paragraphs: [para],
-                    combinedText: para.text,
-                    count: 1
+                    paragraphs: currentBatch,
+                    combinedText: currentBatch.map(p => p.originalText).join('\n\n'),
+                    count: currentBatch.length
                 });
             }
 
-            addLog(`保持原文结构: ${groupedParagraphs.length} 个翻译单元`);
+            addLog(`智能合并: ${paragraphs.length} 个段落 → ${groupedParagraphs.length} 个翻译组`);
 
             // 分段并发翻译
             const CONCURRENT_BATCHES = 15; // 增加并发数，因为现在每个单元更小
@@ -1657,17 +1704,19 @@
                                 '翻译中...'
                             );
 
-                            // 构建翻译提示词 - 强调保持原文格式和标点
+                            // 构建翻译提示词 - 要求保持段落结构
+                            const paraCount = group.paragraphs.length;
                             const translatePrompt = `请将以下${langNames[sourceLang]}文本翻译成${langNames[targetLang]}。
 
 翻译要求：
-1. 翻译所有文本内容，不要遗漏任何词或句子
-2. 保持原文的标点符号和特殊格式
-3. 保持专有名词（人名、地名）翻译的一致性
-4. 只返回翻译结果，不要添加任何解释
-5. 保持原文的语气和风格
+1. 将以下${paraCount}个段落翻译成${langNames[targetLang]}
+2. 必须保持段落结构，每个段落之间用两个换行符分隔（即空一行）
+3. 翻译所有文本内容，不要遗漏任何词或句子
+4. 保持专有名词（人名、地名）翻译的一致性
+5. 只返回翻译结果，不要添加任何解释
+6. 保持原文的语气和风格
 
-原文：
+原文（共${paraCount}段）：
 ${originalText}`;
 
                             const response = await fetch(`${baseUrl}chat/completions`, {
@@ -1701,8 +1750,17 @@ ${originalText}`;
                                 throw new Error('API 返回了空响应');
                             }
 
-                            // 直接分配翻译结果（因为每个组只有1个段落）
-                            group.paragraphs[0].translatedText = translatedText;
+                            // 按段落边界分割翻译结果
+                            const translatedLines = translatedText.split(/\n\n+/).map(line => line.trim()).filter(line => line);
+
+                            // 分配翻译结果到各个段落
+                            group.paragraphs.forEach((para, idx) => {
+                                if (idx < translatedLines.length) {
+                                    para.translatedText = translatedLines[idx];
+                                } else {
+                                    para.translatedText = para.originalText; // 保持原文
+                                }
+                            });
 
                             // 更新对比窗口
                             updateComparisonWindow(
@@ -1778,14 +1836,20 @@ ${originalText}`;
             // 检查是否有原文残留（在翻译后的HTML中搜索原文特征）
             addLog(`正在检查原文残留...`);
 
-            // 直接在DOM中修改文本节点，然后序列化
+            // 直接在DOM中修改文本，然后序列化
             let replacedCount = 0;
             let skippedCount = 0;
 
             paragraphs.forEach(para => {
                 if (para.translatedText && para.translatedText !== para.originalText) {
-                    // 直接修改文本节点的内容
-                    para.textNode.textContent = para.translatedText;
+                    // 根据段落类型进行替换
+                    if (para.element) {
+                        // 块级元素：替换整个元素的文本内容
+                        para.element.textContent = para.translatedText;
+                    } else if (para.textNode) {
+                        // 文本节点：直接替换
+                        para.textNode.textContent = para.translatedText;
+                    }
                     replacedCount++;
                 } else {
                     skippedCount++;
@@ -1794,31 +1858,44 @@ ${originalText}`;
 
             addLog(`文本替换: ${replacedCount} 个已翻译, ${skippedCount} 个保持原样`);
 
-            // 使用XMLSerializer序列化DOM，保留XHTML格式
+            // 序列化DOM为HTML，保留原文结构
             let translatedHTML;
             try {
-                // 检查是否有XHTML DOCTYPE
+                // 检查是否是XHTML
                 const isXHTML = text.toLowerCase().includes('xhtml') ||
                                text.toLowerCase().includes('<!doctype html public') ||
                                text.includes('xmlns=');
 
                 if (isXHTML) {
-                    // 使用XMLSerializer序列化（保留XHTML格式）
+                    // XHTML文件：使用XMLSerializer序列化body内容
                     const serializer = new XMLSerializer();
-                    // 序列化整个文档，包括XML声明
-                    const serialized = serializer.serializeToString(doc);
 
-                    // 如果原始HTML有DOCTYPE，添加回去
+                    // 只序列化body的内容，不包括html标签
+                    // 先提取body内的所有子节点
+                    const bodyContent = Array.from(doc.body.childNodes).map(node => {
+                        return serializer.serializeToString(node);
+                    }).join('');
+
+                    // 构建完整的HTML，保留原始DOCTYPE和html标签属性
                     const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
+                    const htmlTagMatch = text.match(/<html[^>]*>/i);
+                    const htmlEndTag = text.match(/<\/html>/i);
+
+                    translatedHTML = '';
                     if (docTypeMatch) {
-                        translatedHTML = docTypeMatch[0] + '\n' + serialized;
-                    } else {
-                        translatedHTML = serialized;
+                        translatedHTML += docTypeMatch[0] + '\n';
+                    }
+                    if (htmlTagMatch) {
+                        translatedHTML += htmlTagMatch[0] + '\n';
+                    }
+                    translatedHTML += '<body>' + bodyContent + '</body>\n';
+                    if (htmlEndTag) {
+                        translatedHTML += htmlEndTag[0];
                     }
 
                     addLog('使用XMLSerializer保留XHTML格式');
                 } else {
-                    // 普通HTML，使用outerHTML
+                    // 普通HTML：直接使用outerHTML
                     translatedHTML = doc.documentElement.outerHTML;
 
                     // 如果原始HTML有DOCTYPE，添加回去
@@ -1830,13 +1907,24 @@ ${originalText}`;
                     addLog('使用标准HTML格式');
                 }
             } catch (error) {
-                // 如果序列化失败，回退到outerHTML
-                addLog(`XMLSerializer失败，使用outerHTML: ${error.message}`, true);
-                translatedHTML = doc.documentElement.outerHTML;
+                // 如果序列化失败，回退到简单方法
+                addLog(`序列化失败，使用备选方案: ${error.message}`, true);
 
+                // 备选方案：直接使用innerHTML
                 const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
+                const htmlTagMatch = text.match(/<html[^>]*>/i);
+                const htmlEndTag = text.match(/<\/html>/i);
+
+                translatedHTML = '';
                 if (docTypeMatch) {
-                    translatedHTML = docTypeMatch[0] + '\n' + translatedHTML;
+                    translatedHTML += docTypeMatch[0] + '\n';
+                }
+                if (htmlTagMatch) {
+                    translatedHTML += htmlTagMatch[0] + '\n';
+                }
+                translatedHTML += '<body>' + doc.body.innerHTML + '</body>\n';
+                if (htmlEndTag) {
+                    translatedHTML += htmlEndTag[0];
                 }
             }
 
@@ -1868,74 +1956,125 @@ ${originalText}`;
                 'pt': '葡萄牙语'
             };
 
-            // 使用DOMParser解析HTML（仅用于提取文本节点位置）
+            // 使用DOMParser解析HTML
             const parser = new DOMParser();
             const doc = parser.parseFromString(text, 'text/html');
 
-            // 使用TreeWalker提取所有文本节点，避免重复
+            // 提取段落文本，保持原文结构
             const paragraphs = [];
-            const walker = document.createTreeWalker(
-                doc.body,
-                NodeFilter.SHOW_TEXT,
-                {
-                    acceptNode: function(node) {
-                        const textContent = node.textContent;
 
-                        // 跳过空白节点
-                        if (!textContent || !textContent.trim()) {
-                            return NodeFilter.FILTER_REJECT;
-                        }
+            // 查找所有包含文本的块级元素
+            const blockElements = doc.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre');
 
-                        // 跳过script和style标签内的文本
-                        const parent = node.parentElement;
-                        if (parent) {
-                            const tagName = parent.tagName.toUpperCase();
-                            if (tagName === 'SCRIPT' || tagName === 'STYLE') {
+            if (blockElements.length > 0) {
+                // 使用块级元素作为段落边界
+                blockElements.forEach((element, index) => {
+                    const text = element.textContent.trim();
+                    if (text.length >= 1 && !/^[0-9\s\p{P}\p{S}]+$/u.test(text)) {
+                        paragraphs.push({
+                            element: element,
+                            originalText: text,
+                            index: index
+                        });
+                    }
+                });
+            } else {
+                // 如果没有块级元素，使用文本节点
+                const walker = document.createTreeWalker(
+                    doc.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: function(node) {
+                            const textContent = node.textContent;
+                            if (!textContent || !textContent.trim()) {
                                 return NodeFilter.FILTER_REJECT;
                             }
+                            const parent = node.parentElement;
+                            if (parent) {
+                                const tagName = parent.tagName.toUpperCase();
+                                if (tagName === 'SCRIPT' || tagName === 'STYLE') {
+                                    return NodeFilter.FILTER_REJECT;
+                                }
+                            }
+                            return NodeFilter.FILTER_ACCEPT;
                         }
+                    },
+                    false
+                );
 
-                        // 只处理有一定长度的文本（至少1个字符）
-                        if (textContent.trim().length < 1) {
-                            return NodeFilter.FILTER_REJECT;
-                        }
-
-                        return NodeFilter.FILTER_ACCEPT;
+                let node;
+                let index = 0;
+                while (node = walker.nextNode()) {
+                    const originalText = node.textContent.trim();
+                    if (originalText.length >= 1 && !/^[0-9\s\p{P}\p{S}]+$/u.test(originalText)) {
+                        paragraphs.push({
+                            textNode: node,
+                            originalText: originalText,
+                            index: index++
+                        });
                     }
-                },
-                false
-            );
-
-            let node;
-            let index = 0;
-            while (node = walker.nextNode()) {
-                const originalText = node.textContent.trim();
-
-                // 只处理有一定长度的文本（至少1个字符）
-                if (originalText.length >= 1) {
-                    paragraphs.push({
-                        textNode: node,
-                        originalText: originalText,
-                        text: originalText,
-                        index: index++
-                    });
                 }
             }
 
-            addLog(`找到 ${paragraphs.length} 个文本节点`);
+            addLog(`找到 ${paragraphs.length} 个段落`);
 
-            // 保持原文排版风格：每个文本节点单独翻译
+            // 智能合并：每200-300字一组，但记住段落边界
+            const TARGET_MIN_LENGTH = 200;
+            const TARGET_MAX_LENGTH = 300;
             const groupedParagraphs = [];
+            let currentBatch = [];
+            let currentLength = 0;
+
             for (let i = 0; i < paragraphs.length; i++) {
                 const para = paragraphs[i];
+                const textLength = para.originalText.length;
+
+                // 如果单个段落就超过300字，单独处理
+                if (textLength > TARGET_MAX_LENGTH) {
+                    // 先保存之前累积的
+                    if (currentBatch.length > 0) {
+                        groupedParagraphs.push({
+                            paragraphs: currentBatch,
+                            combinedText: currentBatch.map(p => p.originalText).join('\n\n'),
+                            count: currentBatch.length
+                        });
+                        currentBatch = [];
+                        currentLength = 0;
+                    }
+                    // 长段落单独成组
+                    groupedParagraphs.push({
+                        paragraphs: [para],
+                        combinedText: para.originalText,
+                        count: 1
+                    });
+                } else {
+                    // 累积小段落
+                    currentBatch.push(para);
+                    currentLength += textLength;
+
+                    // 如果达到目标长度或批次够多，保存
+                    if (currentLength >= TARGET_MIN_LENGTH || currentBatch.length >= 10) {
+                        groupedParagraphs.push({
+                            paragraphs: currentBatch,
+                            combinedText: currentBatch.map(p => p.originalText).join('\n\n'),
+                            count: currentBatch.length
+                        });
+                        currentBatch = [];
+                        currentLength = 0;
+                    }
+                }
+            }
+
+            // 保存剩余的
+            if (currentBatch.length > 0) {
                 groupedParagraphs.push({
-                    paragraphs: [para],
-                    combinedText: para.text,
-                    count: 1
+                    paragraphs: currentBatch,
+                    combinedText: currentBatch.map(p => p.originalText).join('\n\n'),
+                    count: currentBatch.length
                 });
             }
 
-            addLog(`保持原文结构: ${groupedParagraphs.length} 个翻译单元`);
+            addLog(`智能合并: ${paragraphs.length} 个段落 → ${groupedParagraphs.length} 个翻译组`);
 
             // 分段并发翻译
             const CONCURRENT_BATCHES = 15; // 增加并发数，因为现在每个单元更小
@@ -1970,17 +2109,19 @@ ${originalText}`;
                                 '翻译中...'
                             );
 
-                            // 构建翻译提示词 - 强调保持原文格式和标点
+                            // 构建翻译提示词 - 要求保持段落结构
+                            const paraCount = group.paragraphs.length;
                             const translatePrompt = `请将以下${langNames[sourceLang]}文本翻译成${langNames[targetLang]}。
 
 翻译要求：
-1. 翻译所有文本内容，不要遗漏任何词或句子
-2. 保持原文的标点符号和特殊格式
-3. 保持专有名词（人名、地名）翻译的一致性
-4. 只返回翻译结果，不要添加任何解释
-5. 保持原文的语气和风格
+1. 将以下${paraCount}个段落翻译成${langNames[targetLang]}
+2. 必须保持段落结构，每个段落之间用两个换行符分隔（即空一行）
+3. 翻译所有文本内容，不要遗漏任何词或句子
+4. 保持专有名词（人名、地名）翻译的一致性
+5. 只返回翻译结果，不要添加任何解释
+6. 保持原文的语气和风格
 
-原文：
+原文（共${paraCount}段）：
 ${originalText}`;
 
                             const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -2017,8 +2158,17 @@ ${originalText}`;
 
                             const translatedText = data.choices[0].message.content.trim();
 
-                            // 直接分配翻译结果（因为每个组只有1个段落）
-                            group.paragraphs[0].translatedText = translatedText;
+                            // 按段落边界分割翻译结果
+                            const translatedLines = translatedText.split(/\n\n+/).map(line => line.trim()).filter(line => line);
+
+                            // 分配翻译结果到各个段落
+                            group.paragraphs.forEach((para, idx) => {
+                                if (idx < translatedLines.length) {
+                                    para.translatedText = translatedLines[idx];
+                                } else {
+                                    para.translatedText = para.originalText; // 保持原文
+                                }
+                            });
 
                             // 更新对比窗口 - 显示译文
                             updateComparisonWindow(
@@ -2096,14 +2246,20 @@ ${originalText}`;
             // 检查是否有原文残留（在翻译后的HTML中搜索原文特征）
             addLog(`正在检查原文残留...`);
 
-            // 直接在DOM中修改文本节点，然后序列化
+            // 直接在DOM中修改文本，然后序列化
             let replacedCount = 0;
             let skippedCount = 0;
 
             paragraphs.forEach(para => {
                 if (para.translatedText && para.translatedText !== para.originalText) {
-                    // 直接修改文本节点的内容
-                    para.textNode.textContent = para.translatedText;
+                    // 根据段落类型进行替换
+                    if (para.element) {
+                        // 块级元素：替换整个元素的文本内容
+                        para.element.textContent = para.translatedText;
+                    } else if (para.textNode) {
+                        // 文本节点：直接替换
+                        para.textNode.textContent = para.translatedText;
+                    }
                     replacedCount++;
                 } else {
                     skippedCount++;
@@ -2112,31 +2268,44 @@ ${originalText}`;
 
             addLog(`文本替换: ${replacedCount} 个已翻译, ${skippedCount} 个保持原样`);
 
-            // 使用XMLSerializer序列化DOM，保留XHTML格式
+            // 序列化DOM为HTML，保留原文结构
             let translatedHTML;
             try {
-                // 检查是否有XHTML DOCTYPE
+                // 检查是否是XHTML
                 const isXHTML = text.toLowerCase().includes('xhtml') ||
                                text.toLowerCase().includes('<!doctype html public') ||
                                text.includes('xmlns=');
 
                 if (isXHTML) {
-                    // 使用XMLSerializer序列化（保留XHTML格式）
+                    // XHTML文件：使用XMLSerializer序列化body内容
                     const serializer = new XMLSerializer();
-                    // 序列化整个文档，包括XML声明
-                    const serialized = serializer.serializeToString(doc);
 
-                    // 如果原始HTML有DOCTYPE，添加回去
+                    // 只序列化body的内容，不包括html标签
+                    // 先提取body内的所有子节点
+                    const bodyContent = Array.from(doc.body.childNodes).map(node => {
+                        return serializer.serializeToString(node);
+                    }).join('');
+
+                    // 构建完整的HTML，保留原始DOCTYPE和html标签属性
                     const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
+                    const htmlTagMatch = text.match(/<html[^>]*>/i);
+                    const htmlEndTag = text.match(/<\/html>/i);
+
+                    translatedHTML = '';
                     if (docTypeMatch) {
-                        translatedHTML = docTypeMatch[0] + '\n' + serialized;
-                    } else {
-                        translatedHTML = serialized;
+                        translatedHTML += docTypeMatch[0] + '\n';
+                    }
+                    if (htmlTagMatch) {
+                        translatedHTML += htmlTagMatch[0] + '\n';
+                    }
+                    translatedHTML += '<body>' + bodyContent + '</body>\n';
+                    if (htmlEndTag) {
+                        translatedHTML += htmlEndTag[0];
                     }
 
                     addLog('使用XMLSerializer保留XHTML格式');
                 } else {
-                    // 普通HTML，使用outerHTML
+                    // 普通HTML：直接使用outerHTML
                     translatedHTML = doc.documentElement.outerHTML;
 
                     // 如果原始HTML有DOCTYPE，添加回去
@@ -2148,13 +2317,24 @@ ${originalText}`;
                     addLog('使用标准HTML格式');
                 }
             } catch (error) {
-                // 如果序列化失败，回退到outerHTML
-                addLog(`XMLSerializer失败，使用outerHTML: ${error.message}`, true);
-                translatedHTML = doc.documentElement.outerHTML;
+                // 如果序列化失败，回退到简单方法
+                addLog(`序列化失败，使用备选方案: ${error.message}`, true);
 
+                // 备选方案：直接使用innerHTML
                 const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
+                const htmlTagMatch = text.match(/<html[^>]*>/i);
+                const htmlEndTag = text.match(/<\/html>/i);
+
+                translatedHTML = '';
                 if (docTypeMatch) {
-                    translatedHTML = docTypeMatch[0] + '\n' + translatedHTML;
+                    translatedHTML += docTypeMatch[0] + '\n';
+                }
+                if (htmlTagMatch) {
+                    translatedHTML += htmlTagMatch[0] + '\n';
+                }
+                translatedHTML += '<body>' + doc.body.innerHTML + '</body>\n';
+                if (htmlEndTag) {
+                    translatedHTML += htmlEndTag[0];
                 }
             }
 
