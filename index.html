@@ -1352,6 +1352,18 @@
 
                             await translatedEpub.file(filename, translatedText);
 
+                            // 验证翻译后的内容
+                            const translatedParser = new DOMParser();
+                            const translatedDoc = translatedParser.parseFromString(translatedText, 'text/html');
+                            const translatedBodyText = translatedDoc.body.textContent || '';
+                            const translatedBodyLength = translatedBodyText.trim().length;
+
+                            if (translatedBodyLength === 0) {
+                                addLog(`⚠️ 警告: ${filename} 翻译后内容为空！`, true);
+                            } else {
+                                addLog(`  -> ✓ 翻译完成，内容长度: ${translatedBodyLength} 字`);
+                            }
+
                             // 更新进度显示
                             const progress = Math.round((translatedChars / totalCharsToTranslate) * 100);
                             updateProgress(`翻译中... ${translatedChars.toLocaleString()}/${totalCharsToTranslate.toLocaleString()} 字 (${progress}%)`, progress);
@@ -1461,6 +1473,18 @@
                             // 翻译元数据
                             const translatedText = await translateMetadata(opfContent, sourceLang, targetLang);
                             await translatedEpub.file(filename, translatedText);
+
+                            // 验证翻译后的内容
+                            const translatedParser = new DOMParser();
+                            const translatedDoc = translatedParser.parseFromString(translatedText, 'text/html');
+                            const translatedBodyText = translatedDoc.body.textContent || '';
+                            const translatedBodyLength = translatedBodyText.trim().length;
+
+                            if (translatedBodyLength === 0) {
+                                addLog(`⚠️ 警告: ${filename} 翻译后内容为空！`, true);
+                            } else {
+                                addLog(`  -> ✓ 翻译完成，内容长度: ${translatedBodyLength} 字`);
+                            }
                         } else if (filename.endsWith('.css')) {
                             // 处理CSS文件 - 转换竖排为横排
                             addLog(`处理CSS文件: ${filename}`);
@@ -1914,33 +1938,35 @@ ${originalText}`;
                                text.includes('xmlns=');
 
                 if (isXHTML) {
-                    // XHTML文件：使用XMLSerializer序列化body内容
+                    // XHTML文件：使用XMLSerializer序列化
                     const serializer = new XMLSerializer();
 
-                    // 只序列化body的内容，不包括html标签
-                    // 先提取body内的所有子节点
-                    const bodyContent = Array.from(doc.body.childNodes).map(node => {
-                        return serializer.serializeToString(node);
-                    }).join('');
+                    // 检查原始文件是否有html标签
+                    const hasHtmlTag = text.toLowerCase().includes('<html');
 
-                    // 构建完整的HTML，保留原始DOCTYPE和html标签属性
-                    const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
-                    const htmlTagMatch = text.match(/<html[^>]*>/i);
-                    const htmlEndTag = text.match(/<\/html>/i);
+                    if (hasHtmlTag) {
+                        // 完整的HTML文档：序列化整个document
+                        const serialized = serializer.serializeToString(doc);
 
-                    translatedHTML = '';
-                    if (docTypeMatch) {
-                        translatedHTML += docTypeMatch[0] + '\n';
-                    }
-                    if (htmlTagMatch) {
-                        translatedHTML += htmlTagMatch[0] + '\n';
-                    }
-                    translatedHTML += '<body>' + bodyContent + '</body>\n';
-                    if (htmlEndTag) {
-                        translatedHTML += htmlEndTag[0];
-                    }
+                        // 保留DOCTYPE
+                        const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
+                        translatedHTML = '';
+                        if (docTypeMatch) {
+                            translatedHTML = docTypeMatch[0] + '\n';
+                        }
+                        translatedHTML += serialized;
 
-                    addLog('使用XMLSerializer保留XHTML格式');
+                        addLog('使用XMLSerializer序列化完整文档');
+                    } else {
+                        // 只有body内容：序列化body的子节点
+                        const bodyContent = Array.from(doc.body.childNodes).map(node => {
+                            return serializer.serializeToString(node);
+                        }).join('');
+
+                        translatedHTML = bodyContent;
+
+                        addLog('使用XMLSerializer序列化body内容');
+                    }
                 } else {
                     // 普通HTML：直接使用outerHTML
                     translatedHTML = doc.documentElement.outerHTML;
@@ -1958,21 +1984,7 @@ ${originalText}`;
                 addLog(`序列化失败，使用备选方案: ${error.message}`, true);
 
                 // 备选方案：直接使用innerHTML
-                const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
-                const htmlTagMatch = text.match(/<html[^>]*>/i);
-                const htmlEndTag = text.match(/<\/html>/i);
-
-                translatedHTML = '';
-                if (docTypeMatch) {
-                    translatedHTML += docTypeMatch[0] + '\n';
-                }
-                if (htmlTagMatch) {
-                    translatedHTML += htmlTagMatch[0] + '\n';
-                }
-                translatedHTML += '<body>' + doc.body.innerHTML + '</body>\n';
-                if (htmlEndTag) {
-                    translatedHTML += htmlEndTag[0];
-                }
+                translatedHTML = doc.body.innerHTML;
             }
 
             // 检测并转换竖排为横排
@@ -2324,33 +2336,35 @@ ${originalText}`;
                                text.includes('xmlns=');
 
                 if (isXHTML) {
-                    // XHTML文件：使用XMLSerializer序列化body内容
+                    // XHTML文件：使用XMLSerializer序列化
                     const serializer = new XMLSerializer();
 
-                    // 只序列化body的内容，不包括html标签
-                    // 先提取body内的所有子节点
-                    const bodyContent = Array.from(doc.body.childNodes).map(node => {
-                        return serializer.serializeToString(node);
-                    }).join('');
+                    // 检查原始文件是否有html标签
+                    const hasHtmlTag = text.toLowerCase().includes('<html');
 
-                    // 构建完整的HTML，保留原始DOCTYPE和html标签属性
-                    const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
-                    const htmlTagMatch = text.match(/<html[^>]*>/i);
-                    const htmlEndTag = text.match(/<\/html>/i);
+                    if (hasHtmlTag) {
+                        // 完整的HTML文档：序列化整个document
+                        const serialized = serializer.serializeToString(doc);
 
-                    translatedHTML = '';
-                    if (docTypeMatch) {
-                        translatedHTML += docTypeMatch[0] + '\n';
-                    }
-                    if (htmlTagMatch) {
-                        translatedHTML += htmlTagMatch[0] + '\n';
-                    }
-                    translatedHTML += '<body>' + bodyContent + '</body>\n';
-                    if (htmlEndTag) {
-                        translatedHTML += htmlEndTag[0];
-                    }
+                        // 保留DOCTYPE
+                        const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
+                        translatedHTML = '';
+                        if (docTypeMatch) {
+                            translatedHTML = docTypeMatch[0] + '\n';
+                        }
+                        translatedHTML += serialized;
 
-                    addLog('使用XMLSerializer保留XHTML格式');
+                        addLog('使用XMLSerializer序列化完整文档');
+                    } else {
+                        // 只有body内容：序列化body的子节点
+                        const bodyContent = Array.from(doc.body.childNodes).map(node => {
+                            return serializer.serializeToString(node);
+                        }).join('');
+
+                        translatedHTML = bodyContent;
+
+                        addLog('使用XMLSerializer序列化body内容');
+                    }
                 } else {
                     // 普通HTML：直接使用outerHTML
                     translatedHTML = doc.documentElement.outerHTML;
@@ -2368,21 +2382,7 @@ ${originalText}`;
                 addLog(`序列化失败，使用备选方案: ${error.message}`, true);
 
                 // 备选方案：直接使用innerHTML
-                const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
-                const htmlTagMatch = text.match(/<html[^>]*>/i);
-                const htmlEndTag = text.match(/<\/html>/i);
-
-                translatedHTML = '';
-                if (docTypeMatch) {
-                    translatedHTML += docTypeMatch[0] + '\n';
-                }
-                if (htmlTagMatch) {
-                    translatedHTML += htmlTagMatch[0] + '\n';
-                }
-                translatedHTML += '<body>' + doc.body.innerHTML + '</body>\n';
-                if (htmlEndTag) {
-                    translatedHTML += htmlEndTag[0];
-                }
+                translatedHTML = doc.body.innerHTML;
             }
 
             // 检测并转换竖排为横排
