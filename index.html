@@ -1633,12 +1633,14 @@
                 {
                     acceptNode: function(node) {
                         const textContent = node.textContent;
-                        if (!textContent || !textContent.trim()) {
+                        // 只要有实际文本内容就接受
+                        if (!textContent || textContent.trim().length === 0) {
                             return NodeFilter.FILTER_REJECT;
                         }
                         const parent = node.parentElement;
                         if (parent) {
                             const tagName = parent.tagName.toUpperCase();
+                            // 跳过script和style
                             if (tagName === 'SCRIPT' || tagName === 'STYLE') {
                                 return NodeFilter.FILTER_REJECT;
                             }
@@ -1652,11 +1654,21 @@
             // 收集所有文本节点的父元素
             const parentElements = new Set();
             let node;
+            let totalTextNodes = 0;
             while (node = walker.nextNode()) {
+                totalTextNodes++;
                 const parent = node.parentElement;
                 if (parent) {
                     parentElements.add(parent);
                 }
+            }
+
+            // 调试信息：显示找到了多少文本节点和父元素
+            if (totalTextNodes === 0) {
+                addLog(`  -> 调试: 未找到任何文本节点`);
+                // 尝试显示body的HTML结构（前200字符）
+                const bodyPreview = doc.body.innerHTML.substring(0, 200);
+                addLog(`  -> body内容预览: ${bodyPreview}...`);
             }
 
             // 从父元素中提取段落
@@ -1674,7 +1686,7 @@
                 });
             }
 
-            addLog(`找到 ${paragraphs.length} 个段落 (来自 ${parentElements.size} 个父元素)`);
+            addLog(`找到 ${paragraphs.length} 个段落 (来自 ${parentElements.size} 个父元素, 共 ${totalTextNodes} 个文本节点)`);
 
             // 智能合并：每300-500字一组，减少API调用次数
             const TARGET_MIN_LENGTH = 300;
@@ -2024,12 +2036,14 @@ ${originalText}`;
                 {
                     acceptNode: function(node) {
                         const textContent = node.textContent;
-                        if (!textContent || !textContent.trim()) {
+                        // 只要有实际文本内容就接受
+                        if (!textContent || textContent.trim().length === 0) {
                             return NodeFilter.FILTER_REJECT;
                         }
                         const parent = node.parentElement;
                         if (parent) {
                             const tagName = parent.tagName.toUpperCase();
+                            // 跳过script和style
                             if (tagName === 'SCRIPT' || tagName === 'STYLE') {
                                 return NodeFilter.FILTER_REJECT;
                             }
@@ -2043,11 +2057,21 @@ ${originalText}`;
             // 收集所有文本节点的父元素
             const parentElements = new Set();
             let node;
+            let totalTextNodes = 0;
             while (node = walker.nextNode()) {
+                totalTextNodes++;
                 const parent = node.parentElement;
                 if (parent) {
                     parentElements.add(parent);
                 }
+            }
+
+            // 调试信息：显示找到了多少文本节点和父元素
+            if (totalTextNodes === 0) {
+                addLog(`  -> 调试: 未找到任何文本节点`);
+                // 尝试显示body的HTML结构（前200字符）
+                const bodyPreview = doc.body.innerHTML.substring(0, 200);
+                addLog(`  -> body内容预览: ${bodyPreview}...`);
             }
 
             // 从父元素中提取段落
@@ -2065,7 +2089,7 @@ ${originalText}`;
                 });
             }
 
-            addLog(`找到 ${paragraphs.length} 个段落 (来自 ${parentElements.size} 个父元素)`);
+            addLog(`找到 ${paragraphs.length} 个段落 (来自 ${parentElements.size} 个父元素, 共 ${totalTextNodes} 个文本节点)`);
 
             // 智能合并：每300-500字一组，减少API调用次数
             const TARGET_MIN_LENGTH = 300;
