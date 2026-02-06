@@ -1626,14 +1626,45 @@
             // 提取段落文本，保持原文结构
             const paragraphs = [];
 
-            // 查找所有包含文本的块级元素
-            const blockElements = doc.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre');
+            // 首先使用TreeWalker查找所有文本节点（最全面的方法）
+            const walker = document.createTreeWalker(
+                doc.body,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: function(node) {
+                        const textContent = node.textContent;
+                        if (!textContent || !textContent.trim()) {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                        const parent = node.parentElement;
+                        if (parent) {
+                            const tagName = parent.tagName.toUpperCase();
+                            if (tagName === 'SCRIPT' || tagName === 'STYLE') {
+                                return NodeFilter.FILTER_REJECT;
+                            }
+                        }
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                },
+                false
+            );
 
-            if (blockElements.length > 0) {
-                // 使用块级元素作为段落边界
-                blockElements.forEach((element, index) => {
+            // 收集所有文本节点的父元素
+            const parentElements = new Set();
+            let node;
+            while (node = walker.nextNode()) {
+                const parent = node.parentElement;
+                if (parent) {
+                    parentElements.add(parent);
+                }
+            }
+
+            // 从父元素中提取段落
+            if (parentElements.size > 0) {
+                parentElements.forEach((element, index) => {
                     const text = element.textContent.trim();
-                    if (text.length >= 1 && !/^[0-9\s\p{P}\p{S}]+$/u.test(text)) {
+                    // 放宽过滤条件：只要有文本就保留
+                    if (text.length >= 1) {
                         paragraphs.push({
                             element: element,
                             originalText: text,
@@ -1641,45 +1672,9 @@
                         });
                     }
                 });
-            } else {
-                // 如果没有块级元素，使用文本节点
-                const walker = document.createTreeWalker(
-                    doc.body,
-                    NodeFilter.SHOW_TEXT,
-                    {
-                        acceptNode: function(node) {
-                            const textContent = node.textContent;
-                            if (!textContent || !textContent.trim()) {
-                                return NodeFilter.FILTER_REJECT;
-                            }
-                            const parent = node.parentElement;
-                            if (parent) {
-                                const tagName = parent.tagName.toUpperCase();
-                                if (tagName === 'SCRIPT' || tagName === 'STYLE') {
-                                    return NodeFilter.FILTER_REJECT;
-                                }
-                            }
-                            return NodeFilter.FILTER_ACCEPT;
-                        }
-                    },
-                    false
-                );
-
-                let node;
-                let index = 0;
-                while (node = walker.nextNode()) {
-                    const originalText = node.textContent.trim();
-                    if (originalText.length >= 1 && !/^[0-9\s\p{P}\p{S}]+$/u.test(originalText)) {
-                        paragraphs.push({
-                            textNode: node,
-                            originalText: originalText,
-                            index: index++
-                        });
-                    }
-                }
             }
 
-            addLog(`找到 ${paragraphs.length} 个段落`);
+            addLog(`找到 ${paragraphs.length} 个段落 (来自 ${parentElements.size} 个父元素)`);
 
             // 智能合并：每300-500字一组，减少API调用次数
             const TARGET_MIN_LENGTH = 300;
@@ -2022,14 +2017,45 @@ ${originalText}`;
             // 提取段落文本，保持原文结构
             const paragraphs = [];
 
-            // 查找所有包含文本的块级元素
-            const blockElements = doc.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre');
+            // 首先使用TreeWalker查找所有文本节点（最全面的方法）
+            const walker = document.createTreeWalker(
+                doc.body,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: function(node) {
+                        const textContent = node.textContent;
+                        if (!textContent || !textContent.trim()) {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                        const parent = node.parentElement;
+                        if (parent) {
+                            const tagName = parent.tagName.toUpperCase();
+                            if (tagName === 'SCRIPT' || tagName === 'STYLE') {
+                                return NodeFilter.FILTER_REJECT;
+                            }
+                        }
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                },
+                false
+            );
 
-            if (blockElements.length > 0) {
-                // 使用块级元素作为段落边界
-                blockElements.forEach((element, index) => {
+            // 收集所有文本节点的父元素
+            const parentElements = new Set();
+            let node;
+            while (node = walker.nextNode()) {
+                const parent = node.parentElement;
+                if (parent) {
+                    parentElements.add(parent);
+                }
+            }
+
+            // 从父元素中提取段落
+            if (parentElements.size > 0) {
+                parentElements.forEach((element, index) => {
                     const text = element.textContent.trim();
-                    if (text.length >= 1 && !/^[0-9\s\p{P}\p{S}]+$/u.test(text)) {
+                    // 放宽过滤条件：只要有文本就保留
+                    if (text.length >= 1) {
                         paragraphs.push({
                             element: element,
                             originalText: text,
@@ -2037,45 +2063,9 @@ ${originalText}`;
                         });
                     }
                 });
-            } else {
-                // 如果没有块级元素，使用文本节点
-                const walker = document.createTreeWalker(
-                    doc.body,
-                    NodeFilter.SHOW_TEXT,
-                    {
-                        acceptNode: function(node) {
-                            const textContent = node.textContent;
-                            if (!textContent || !textContent.trim()) {
-                                return NodeFilter.FILTER_REJECT;
-                            }
-                            const parent = node.parentElement;
-                            if (parent) {
-                                const tagName = parent.tagName.toUpperCase();
-                                if (tagName === 'SCRIPT' || tagName === 'STYLE') {
-                                    return NodeFilter.FILTER_REJECT;
-                                }
-                            }
-                            return NodeFilter.FILTER_ACCEPT;
-                        }
-                    },
-                    false
-                );
-
-                let node;
-                let index = 0;
-                while (node = walker.nextNode()) {
-                    const originalText = node.textContent.trim();
-                    if (originalText.length >= 1 && !/^[0-9\s\p{P}\p{S}]+$/u.test(originalText)) {
-                        paragraphs.push({
-                            textNode: node,
-                            originalText: originalText,
-                            index: index++
-                        });
-                    }
-                }
             }
 
-            addLog(`找到 ${paragraphs.length} 个段落`);
+            addLog(`找到 ${paragraphs.length} 个段落 (来自 ${parentElements.size} 个父元素)`);
 
             // 智能合并：每300-500字一组，减少API调用次数
             const TARGET_MIN_LENGTH = 300;
