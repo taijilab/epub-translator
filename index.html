@@ -2054,45 +2054,40 @@ ${originalText}`;
 
             paragraphs.forEach(para => {
                 if (para.translatedText && para.translatedText !== para.originalText) {
-                    // 根据段落类型进行替换
-                    if (para.textNode) {
-                        // 如果有textNode引用，保留原始空白格式
-                        if (para.rawText !== undefined) {
-                            // 提取前导和尾随空白
-                            const leadingWhitespace = para.rawText.match(/^\s*/)[0];
-                            const trailingWhitespace = para.rawText.match(/\s*$/)[0];
-                            // 替换时保留空白
-                            para.textNode.textContent = leadingWhitespace + para.translatedText + trailingWhitespace;
-                        } else {
-                            para.textNode.textContent = para.translatedText;
-                        }
-                        replacedCount++;
-                    } else if (para.element) {
-                        // 对于element，需要替换其中的文本
-                        // 保留空白格式
-                        let finalText = para.translatedText;
-                        if (para.rawText !== undefined) {
-                            const leadingWhitespace = para.rawText.match(/^\s*/)[0];
-                            const trailingWhitespace = para.rawText.match(/\s*$/)[0];
-                            finalText = leadingWhitespace + para.translatedText + trailingWhitespace;
+                    if (para.element) {
+                        // 遍历元素内的所有文本节点，进行替换
+                        const walker = document.createTreeWalker(
+                            para.element,
+                            NodeFilter.SHOW_TEXT,
+                            null,
+                            false
+                        );
+
+                        let textNode;
+                        let found = false;
+                        while (textNode = walker.nextNode()) {
+                            const nodeText = textNode.textContent;
+                            // 如果文本节点包含原文或原文的一部分，进行替换
+                            if (nodeText.includes(para.originalText) || para.originalText.includes(nodeText.trim())) {
+                                // 替换整个节点内容
+                                textNode.textContent = para.translatedText;
+                                found = true;
+                                // 找到第一个匹配就停止，避免重复替换
+                                break;
+                            }
                         }
 
-                        // 检查element内部的结构
-                        const spans = para.element.querySelectorAll('span');
-                        const originalHTML = para.element.innerHTML;
-
-                        // 如果只有一个span且它包含所有文本，只替换span
-                        if (spans.length === 1 && spans[0].textContent.trim() === para.originalText) {
-                            spans[0].textContent = finalText;
-                        } else if (spans.length > 1) {
-                            // 如果有多个span，说明textContent被分割了
-                            // 最简单的方法是：用textContent替换整个element
-                            // 这会保留外层<p>标签，但内部的<span>结构会被简化
-                            para.element.textContent = finalText;
+                        if (found) {
+                            replacedCount++;
                         } else {
-                            // 没有span或其他复杂结构，直接替换textContent
-                            para.element.textContent = finalText;
+                            // 如果TreeWalker没找到，尝试直接替换textContent
+                            // 这是最后的回退方案
+                            para.element.textContent = para.translatedText;
+                            replacedCount++;
                         }
+                    } else if (para.textNode) {
+                        // 如果有textNode引用，直接替换
+                        para.textNode.textContent = para.translatedText;
                         replacedCount++;
                     } else {
                         skippedCount++;
@@ -2556,45 +2551,40 @@ ${originalText}`;
 
             paragraphs.forEach(para => {
                 if (para.translatedText && para.translatedText !== para.originalText) {
-                    // 根据段落类型进行替换
-                    if (para.textNode) {
-                        // 如果有textNode引用，保留原始空白格式
-                        if (para.rawText !== undefined) {
-                            // 提取前导和尾随空白
-                            const leadingWhitespace = para.rawText.match(/^\s*/)[0];
-                            const trailingWhitespace = para.rawText.match(/\s*$/)[0];
-                            // 替换时保留空白
-                            para.textNode.textContent = leadingWhitespace + para.translatedText + trailingWhitespace;
-                        } else {
-                            para.textNode.textContent = para.translatedText;
-                        }
-                        replacedCount++;
-                    } else if (para.element) {
-                        // 对于element，需要替换其中的文本
-                        // 保留空白格式
-                        let finalText = para.translatedText;
-                        if (para.rawText !== undefined) {
-                            const leadingWhitespace = para.rawText.match(/^\s*/)[0];
-                            const trailingWhitespace = para.rawText.match(/\s*$/)[0];
-                            finalText = leadingWhitespace + para.translatedText + trailingWhitespace;
+                    if (para.element) {
+                        // 遍历元素内的所有文本节点，进行替换
+                        const walker = document.createTreeWalker(
+                            para.element,
+                            NodeFilter.SHOW_TEXT,
+                            null,
+                            false
+                        );
+
+                        let textNode;
+                        let found = false;
+                        while (textNode = walker.nextNode()) {
+                            const nodeText = textNode.textContent;
+                            // 如果文本节点包含原文或原文的一部分，进行替换
+                            if (nodeText.includes(para.originalText) || para.originalText.includes(nodeText.trim())) {
+                                // 替换整个节点内容
+                                textNode.textContent = para.translatedText;
+                                found = true;
+                                // 找到第一个匹配就停止，避免重复替换
+                                break;
+                            }
                         }
 
-                        // 检查element内部的结构
-                        const spans = para.element.querySelectorAll('span');
-                        const originalHTML = para.element.innerHTML;
-
-                        // 如果只有一个span且它包含所有文本，只替换span
-                        if (spans.length === 1 && spans[0].textContent.trim() === para.originalText) {
-                            spans[0].textContent = finalText;
-                        } else if (spans.length > 1) {
-                            // 如果有多个span，说明textContent被分割了
-                            // 最简单的方法是：用textContent替换整个element
-                            // 这会保留外层<p>标签，但内部的<span>结构会被简化
-                            para.element.textContent = finalText;
+                        if (found) {
+                            replacedCount++;
                         } else {
-                            // 没有span或其他复杂结构，直接替换textContent
-                            para.element.textContent = finalText;
+                            // 如果TreeWalker没找到，尝试直接替换textContent
+                            // 这是最后的回退方案
+                            para.element.textContent = para.translatedText;
+                            replacedCount++;
                         }
+                    } else if (para.textNode) {
+                        // 如果有textNode引用，直接替换
+                        para.textNode.textContent = para.translatedText;
                         replacedCount++;
                     } else {
                         skippedCount++;
