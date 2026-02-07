@@ -356,9 +356,17 @@
                         </div>
                     </div>
                     <div class="mt-4 pt-3 border-t-2 border-blue-200">
-                        <div class="flex justify-between items-center">
+                        <div class="flex justify-between items-center mb-2">
                             <span class="text-sm text-gray-600 font-medium">预估费用:</span>
                             <span id="estimatedCost" class="text-lg font-bold text-red-600">$0.00</span>
+                        </div>
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-sm text-gray-600 font-medium">翻译时长:</span>
+                            <span id="translationTime" class="text-lg font-bold text-blue-600">0.0 秒</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600 font-medium">翻译进度:</span>
+                            <span id="translationProgress" class="text-lg font-bold text-green-600">0 / 0 字</span>
                         </div>
                     </div>
                 </div>
@@ -469,6 +477,8 @@
         // Token tracking variables
         let totalInputTokens = 0;
         let totalOutputTokens = 0;
+        let totalSourceChars = 0;  // 原文总字数
+        let totalTranslatedChars = 0;  // 译文总字数
 
         // Vertical mode detection
         let isVerticalMode = false;
@@ -476,6 +486,8 @@
         // Translation progress tracking
         let totalCharsToTranslate = 0;
         let translatedChars = 0;
+        let translationStartTime = null;
+        let translationEndTime = null;
 
         // Preview state
         let previewPages = [];
@@ -965,22 +977,53 @@
             return Math.ceil(chineseChars / 1.5 + englishChars / 4);
         }
 
+        // 格式化时长显示
+        function formatDuration(seconds) {
+            if (seconds < 60) {
+                // 小于1分钟，只显示秒
+                return `${Math.round(seconds)} 秒`;
+            } else {
+                // 大于等于1分钟，显示分钟和秒
+                const minutes = Math.floor(seconds / 60);
+                const remainingSeconds = Math.round(seconds % 60);
+                return `${minutes}分${remainingSeconds}秒`;
+            }
+        }
+
         // 更新token显示
         function updateTokenDisplay() {
-            const total = totalInputTokens + totalOutputTokens;
+            // 显示实际的token数
             document.getElementById('inputTokens').textContent = totalInputTokens.toLocaleString();
             document.getElementById('outputTokens').textContent = totalOutputTokens.toLocaleString();
-            document.getElementById('totalTokens').textContent = total.toLocaleString();
+            document.getElementById('totalTokens').textContent = (totalInputTokens + totalOutputTokens).toLocaleString();
 
+            // 使用token估算费用
+            const total = totalInputTokens + totalOutputTokens;
             // DeepSeek定价: 约$0.14每百万tokens
             const estimatedCost = (total / 1000000 * 0.14).toFixed(4);
             document.getElementById('estimatedCost').textContent = `$${estimatedCost}`;
+
+            // 更新翻译进度（显示已翻译的原文字数）
+            document.getElementById('translationProgress').textContent =
+                `${totalSourceChars.toLocaleString()} / ${totalCharsToTranslate.toLocaleString()} 字`;
+
+            // 更新翻译时长
+            if (translationStartTime && isTranslating) {
+                const elapsed = (Date.now() - translationStartTime) / 1000;
+                document.getElementById('translationTime').textContent = formatDuration(elapsed);
+            } else if (translationStartTime && !isTranslating) {
+                // 翻译结束，显示最终时长
+                const elapsed = (translationEndTime - translationStartTime) / 1000;
+                document.getElementById('translationTime').textContent = formatDuration(elapsed);
+            }
         }
 
         // 重置token统计
         function resetTokenCount() {
             totalInputTokens = 0;
             totalOutputTokens = 0;
+            totalSourceChars = 0;
+            totalTranslatedChars = 0;
             updateTokenDisplay();
         }
 
@@ -1274,6 +1317,9 @@
             resetTokenCount();
             totalCharsToTranslate = 0;
             translatedChars = 0;
+            translationStartTime = Date.now();
+            translationEndTime = null;
+            updateTokenDisplay();
 
             // 清空对比窗口
             if (originalTextDiv) originalTextDiv.textContent = '准备中...';
@@ -1339,6 +1385,7 @@
                             const text = doc.body.textContent || '';
                             const charCount = text.trim().replace(/\s+/g, '').length;
                             translatedChars += charCount;
+                            updateTokenDisplay();
 
                             // 检查是否取消
                             if (shouldCancel) {
@@ -1357,9 +1404,14 @@
                             const translatedDoc = translatedParser.parseFromString(translatedText, 'text/html');
                             const translatedBodyText = translatedDoc.body.textContent || '';
                             const translatedBodyLength = translatedBodyText.trim().length;
+                            const translatedInnerLength = translatedDoc.body.innerHTML.trim().length;
 
-                            if (translatedBodyLength === 0) {
+                            // 检查内容是否真正为空（包括SVG等非文本元素）
+                            if (translatedBodyLength === 0 && translatedInnerLength === 0) {
                                 addLog(`⚠️ 警告: ${filename} 翻译后内容为空！`, true);
+                            } else if (translatedBodyLength === 0 && translatedInnerLength > 0) {
+                                // 有HTML内容但没有文本（如SVG），这是正常的
+                                addLog(`  -> ✓ 翻译完成（仅包含非文本内容，如SVG/图片）`);
                             } else {
                                 addLog(`  -> ✓ 翻译完成，内容长度: ${translatedBodyLength} 字`);
                             }
@@ -1479,9 +1531,14 @@
                             const translatedDoc = translatedParser.parseFromString(translatedText, 'text/html');
                             const translatedBodyText = translatedDoc.body.textContent || '';
                             const translatedBodyLength = translatedBodyText.trim().length;
+                            const translatedInnerLength = translatedDoc.body.innerHTML.trim().length;
 
-                            if (translatedBodyLength === 0) {
+                            // 检查内容是否真正为空（包括SVG等非文本元素）
+                            if (translatedBodyLength === 0 && translatedInnerLength === 0) {
                                 addLog(`⚠️ 警告: ${filename} 翻译后内容为空！`, true);
+                            } else if (translatedBodyLength === 0 && translatedInnerLength > 0) {
+                                // 有HTML内容但没有文本（如SVG），这是正常的
+                                addLog(`  -> ✓ 翻译完成（仅包含非文本内容，如SVG/图片）`);
                             } else {
                                 addLog(`  -> ✓ 翻译完成，内容长度: ${translatedBodyLength} 字`);
                             }
@@ -1619,6 +1676,45 @@
                 'pt': '葡萄牙语'
             };
 
+            // 清理AI翻译结果中的提示词残留
+            function cleanTranslatedText(rawText) {
+                let cleaned = rawText;
+
+                // 移除常见的AI回复前缀
+                const prefixesToRemove = [
+                    /^(以下是翻译结果[：:]\s*)/i,
+                    /^(翻译如下[：:]\s*)/i,
+                    /^(根据要求翻译[：:]\s*)/i,
+                    /^(好的，以下是翻译[：:]\s*)/i,
+                    /^(好的[，,]?我来翻译[：:]\s*)/i,
+                    /^(当然[，,]?以下是翻译[：:]\s*)/i,
+                    /^\[翻译\]\s*/i,
+                    /^(Translation[：:]\s*)/i,
+                    /^(Here is the translation[：:]\s*)/i,
+                ];
+
+                for (const prefix of prefixesToRemove) {
+                    cleaned = cleaned.replace(prefix, '');
+                }
+
+                // 移除常见的AI回复后缀
+                const suffixesToRemove = [
+                    /\s*(请注意：以上是翻译结果)\s*$/i,
+                    /\s*(希望这个翻译对您有帮助)\s*$/i,
+                    /\s*(如有需要可以进一步调整)\s*$/i,
+                ];
+
+                for (const suffix of suffixesToRemove) {
+                    cleaned = cleaned.replace(suffix, '');
+                }
+
+                // 移除中间可能出现的解释性文字（如"翻译说明："等）
+                cleaned = cleaned.replace(/\n\n翻译说明[：:].*$/gi, '');
+                cleaned = cleaned.replace(/\n\nNote[：:].*$/gi, '');
+
+                return cleaned.trim();
+            }
+
             // 使用DOMParser解析HTML
             const parser = new DOMParser();
             const doc = parser.parseFromString(text, 'text/html');
@@ -1626,67 +1722,65 @@
             // 提取段落文本，保持原文结构
             const paragraphs = [];
 
-            // 首先使用TreeWalker查找所有文本节点（最全面的方法）
-            const walker = document.createTreeWalker(
+            // 直接查找所有块级元素（最可靠的方法）
+            const blockElements = doc.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, td, th, blockquote');
+
+            blockElements.forEach((element, index) => {
+                const rawText = element.textContent;
+                const trimText = rawText.trim();
+
+                if (trimText.length >= 1) {
+                    paragraphs.push({
+                        element: element,
+                        originalText: trimText,
+                        rawText: rawText,
+                        index: index,
+                        skipReason: null
+                    });
+                }
+            });
+
+            // 统计文本节点数量（用于调试）
+            const textWalker = document.createTreeWalker(
                 doc.body,
                 NodeFilter.SHOW_TEXT,
                 {
                     acceptNode: function(node) {
-                        const textContent = node.textContent;
-                        // 只要有实际文本内容就接受
-                        if (!textContent || textContent.trim().length === 0) {
-                            return NodeFilter.FILTER_REJECT;
-                        }
-                        const parent = node.parentElement;
-                        if (parent) {
-                            const tagName = parent.tagName.toUpperCase();
-                            // 跳过script和style
-                            if (tagName === 'SCRIPT' || tagName === 'STYLE') {
-                                return NodeFilter.FILTER_REJECT;
-                            }
-                        }
-                        return NodeFilter.FILTER_ACCEPT;
+                        return node.textContent && node.textContent.trim().length > 0
+                            ? NodeFilter.FILTER_ACCEPT
+                            : NodeFilter.FILTER_REJECT;
                     }
                 },
                 false
             );
 
-            // 收集所有文本节点的父元素
-            const parentElements = new Set();
-            let node;
             let totalTextNodes = 0;
-            while (node = walker.nextNode()) {
+            let textNode;
+            while (textNode = textWalker.nextNode()) {
                 totalTextNodes++;
-                const parent = node.parentElement;
-                if (parent) {
-                    parentElements.add(parent);
+            }
+
+            addLog(`找到 ${paragraphs.length} 个段落 (共 ${totalTextNodes} 个文本节点)`);
+
+            // 如果没有找到任何段落，直接返回原始内容（避免序列化导致内容丢失）
+            if (paragraphs.length === 0) {
+                addLog(`  -> 未找到可翻译内容，直接使用原始内容`);
+                // 仍然需要处理竖排转换
+                let result = text;
+                const convertCheckbox = document.getElementById('convertToHorizontal');
+                if (convertCheckbox && convertCheckbox.checked) {
+                    result = convertVerticalToHorizontal(text);
                 }
-            }
 
-            // 调试信息：显示找到了多少文本节点和父元素
-            if (totalTextNodes === 0) {
-                addLog(`  -> 调试: 未找到任何文本节点`);
-                // 尝试显示body的HTML结构（前200字符）
-                const bodyPreview = doc.body.innerHTML.substring(0, 200);
-                addLog(`  -> body内容预览: ${bodyPreview}...`);
-            }
+                // 调试：检查返回内容的长度
+                const resultParser = new DOMParser();
+                const resultDoc = resultParser.parseFromString(result, 'text/html');
+                const resultTextLength = resultDoc.body.textContent.trim().length;
+                const resultHtmlLength = resultDoc.body.innerHTML.trim().length;
+                addLog(`  -> 返回内容: 文本${resultTextLength}字, HTML${resultHtmlLength}字`);
 
-            // 从父元素中提取段落
-            if (parentElements.size > 0) {
-                parentElements.forEach((element, index) => {
-                    const text = element.textContent.trim();
-                    // 放宽过滤条件：只要有文本就保留
-                    if (text.length >= 1) {
-                        paragraphs.push({
-                            element: element,
-                            originalText: text,
-                            index: index
-                        });
-                    }
-                });
+                return result;
             }
-
-            addLog(`找到 ${paragraphs.length} 个段落 (来自 ${parentElements.size} 个父元素, 共 ${totalTextNodes} 个文本节点)`);
 
             // 智能合并：每300-500字一组，减少API调用次数
             const TARGET_MIN_LENGTH = 300;
@@ -1750,6 +1844,7 @@
             const CONCURRENT_BATCHES = 30; // 提高并发数，提升翻译速度
             let translatedCount = 0;
             const maxRetries = 3;
+            const translationStartTime = Date.now();  // 记录翻译开始时间
 
             for (let batchStart = 0; batchStart < groupedParagraphs.length; batchStart += CONCURRENT_BATCHES) {
                 // 检查是否需要取消
@@ -1766,7 +1861,14 @@
                     const originalText = group.combinedText;
 
                     // 跳过纯数字、标点或过短文本
-                    if (originalText.length < 1 || /^[\d\s\p{P}\p{S}]+$/u.test(originalText)) {
+                    if (originalText.length < 1) {
+                        // 记录跳过原因
+                        group.paragraphs.forEach(p => p.skipReason = '文本为空');
+                        return { success: true, skipped: true };
+                    }
+                    if (/^[\d\s\p{P}\p{S}]+$/u.test(originalText)) {
+                        // 记录跳过原因
+                        group.paragraphs.forEach(p => p.skipReason = '仅包含数字/标点符号');
                         return { success: true, skipped: true };
                     }
 
@@ -1825,8 +1927,16 @@ ${originalText}`;
                                 throw new Error('API 返回了空响应');
                             }
 
+                            // 清理AI回复中的提示词残留
+                            const cleanedText = cleanTranslatedText(translatedText);
+
                             // 按段落边界分割翻译结果
-                            const translatedLines = translatedText.split(/\n\n+/).map(line => line.trim()).filter(line => line);
+                            const translatedLines = cleanedText.split(/\n\n+/).map(line => line.trim()).filter(line => line);
+
+                            // 检查翻译结果是否完整
+                            if (translatedLines.length < group.paragraphs.length) {
+                                addLog(`  -> ⚠️ 警告: 期望${group.paragraphs.length}段，但AI只返回了${translatedLines.length}段`, true);
+                            }
 
                             // 分配翻译结果到各个段落
                             group.paragraphs.forEach((para, idx) => {
@@ -1834,6 +1944,7 @@ ${originalText}`;
                                     para.translatedText = translatedLines[idx];
                                 } else {
                                     para.translatedText = para.originalText; // 保持原文
+                                    para.skipReason = `AI返回翻译不完整 (期望${group.paragraphs.length}段，收到${translatedLines.length}段)`;
                                 }
                             });
 
@@ -1843,11 +1954,21 @@ ${originalText}`;
                                 translatedText.substring(0, 200) + (translatedText.length > 200 ? '...' : '')
                             );
 
-                            // 统计token消耗
-                            const inputTokens = estimateTokens(translatePrompt);
-                            const outputTokens = estimateTokens(translatedText);
+                            // 优先使用API返回的实际token数
+                            const apiInputTokens = data.usage?.prompt_tokens;
+                            const apiOutputTokens = data.usage?.completion_tokens;
+
+                            // 如果API返回了token数，使用实际值；否则使用估算值
+                            const inputTokens = apiInputTokens || estimateTokens(translatePrompt);
+                            const outputTokens = apiOutputTokens || estimateTokens(translatedText);
+
                             totalInputTokens += inputTokens;
                             totalOutputTokens += outputTokens;
+
+                            // 统计原文和译文字数（用于显示）
+                            totalSourceChars += originalText.trim().length;
+                            totalTranslatedChars += translatedText.trim().length;
+
                             updateTokenDisplay();
 
                             return { success: true, translated: true, groupCount: group.count };
@@ -1872,12 +1993,17 @@ ${originalText}`;
                 // 统计结果
                 results.forEach((result, index) => {
                     const groupIndex = batchStart + index + 1;
+                    const group = batch[index];
+
                     if (result.success) {
                         if (!result.skipped) {
                             translatedCount += result.groupCount || 1;
                         }
                     } else {
-                        addLog(`第 ${groupIndex} 组翻译失败: ${result.error}`, true);
+                        const errorMsg = result.error || '未知错误';
+                        addLog(`第 ${groupIndex} 组翻译失败: ${errorMsg}`, true);
+                        // 记录失败原因到所有段落
+                        group.paragraphs.forEach(p => p.skipReason = `API翻译失败: ${errorMsg}`);
                     }
                 });
 
@@ -1894,6 +2020,13 @@ ${originalText}`;
 
             addLog(`✓ 翻译完成！共翻译 ${translatedCount} 个段落`);
 
+            // 计算翻译时长
+            translationEndTime = Date.now();
+            const translationDuration = translationEndTime - translationStartTime;
+            const durationSeconds = translationDuration / 1000;
+            addLog(`翻译时长: ${formatDuration(durationSeconds)}`);
+            updateTokenDisplay();
+
             // 详细统计：检查有多少段落被翻译
             const totalParagraphs = paragraphs.length;
             const translatedParagraphs = paragraphs.filter(p => p.translatedText && p.translatedText !== p.originalText).length;
@@ -1907,7 +2040,8 @@ ${originalText}`;
                 addLog(`⚠️ 未翻译段落 (共${unchangedParagraphs}段):`);
                 unchangedExamples.forEach((p, idx) => {
                     const preview = p.originalText.substring(0, 100) + (p.originalText.length > 100 ? '...' : '');
-                    addLog(`  ${idx + 1}. [${p.originalText.length}字] "${preview}"`);
+                    const reason = p.skipReason ? ` - 原因: ${p.skipReason}` : '';
+                    addLog(`  ${idx + 1}. [${p.originalText.length}字] "${preview}"${reason}`);
                 });
             }
 
@@ -1921,14 +2055,48 @@ ${originalText}`;
             paragraphs.forEach(para => {
                 if (para.translatedText && para.translatedText !== para.originalText) {
                     // 根据段落类型进行替换
-                    if (para.element) {
-                        // 块级元素：替换整个元素的文本内容
-                        para.element.textContent = para.translatedText;
-                    } else if (para.textNode) {
-                        // 文本节点：直接替换
-                        para.textNode.textContent = para.translatedText;
+                    if (para.textNode) {
+                        // 如果有textNode引用，保留原始空白格式
+                        if (para.rawText !== undefined) {
+                            // 提取前导和尾随空白
+                            const leadingWhitespace = para.rawText.match(/^\s*/)[0];
+                            const trailingWhitespace = para.rawText.match(/\s*$/)[0];
+                            // 替换时保留空白
+                            para.textNode.textContent = leadingWhitespace + para.translatedText + trailingWhitespace;
+                        } else {
+                            para.textNode.textContent = para.translatedText;
+                        }
+                        replacedCount++;
+                    } else if (para.element) {
+                        // 对于element，需要替换其中的文本
+                        // 保留空白格式
+                        let finalText = para.translatedText;
+                        if (para.rawText !== undefined) {
+                            const leadingWhitespace = para.rawText.match(/^\s*/)[0];
+                            const trailingWhitespace = para.rawText.match(/\s*$/)[0];
+                            finalText = leadingWhitespace + para.translatedText + trailingWhitespace;
+                        }
+
+                        // 检查element内部的结构
+                        const spans = para.element.querySelectorAll('span');
+                        const originalHTML = para.element.innerHTML;
+
+                        // 如果只有一个span且它包含所有文本，只替换span
+                        if (spans.length === 1 && spans[0].textContent.trim() === para.originalText) {
+                            spans[0].textContent = finalText;
+                        } else if (spans.length > 1) {
+                            // 如果有多个span，说明textContent被分割了
+                            // 最简单的方法是：用textContent替换整个element
+                            // 这会保留外层<p>标签，但内部的<span>结构会被简化
+                            para.element.textContent = finalText;
+                        } else {
+                            // 没有span或其他复杂结构，直接替换textContent
+                            para.element.textContent = finalText;
+                        }
+                        replacedCount++;
+                    } else {
+                        skippedCount++;
                     }
-                    replacedCount++;
                 } else {
                     skippedCount++;
                 }
@@ -2022,6 +2190,45 @@ ${originalText}`;
                 'pt': '葡萄牙语'
             };
 
+            // 清理AI翻译结果中的提示词残留
+            function cleanTranslatedText(rawText) {
+                let cleaned = rawText;
+
+                // 移除常见的AI回复前缀
+                const prefixesToRemove = [
+                    /^(以下是翻译结果[：:]\s*)/i,
+                    /^(翻译如下[：:]\s*)/i,
+                    /^(根据要求翻译[：:]\s*)/i,
+                    /^(好的，以下是翻译[：:]\s*)/i,
+                    /^(好的[，,]?我来翻译[：:]\s*)/i,
+                    /^(当然[，,]?以下是翻译[：:]\s*)/i,
+                    /^\[翻译\]\s*/i,
+                    /^(Translation[：:]\s*)/i,
+                    /^(Here is the translation[：:]\s*)/i,
+                ];
+
+                for (const prefix of prefixesToRemove) {
+                    cleaned = cleaned.replace(prefix, '');
+                }
+
+                // 移除常见的AI回复后缀
+                const suffixesToRemove = [
+                    /\s*(请注意：以上是翻译结果)\s*$/i,
+                    /\s*(希望这个翻译对您有帮助)\s*$/i,
+                    /\s*(如有需要可以进一步调整)\s*$/i,
+                ];
+
+                for (const suffix of suffixesToRemove) {
+                    cleaned = cleaned.replace(suffix, '');
+                }
+
+                // 移除中间可能出现的解释性文字（如"翻译说明："等）
+                cleaned = cleaned.replace(/\n\n翻译说明[：:].*$/gi, '');
+                cleaned = cleaned.replace(/\n\nNote[：:].*$/gi, '');
+
+                return cleaned.trim();
+            }
+
             // 使用DOMParser解析HTML
             const parser = new DOMParser();
             const doc = parser.parseFromString(text, 'text/html');
@@ -2029,67 +2236,65 @@ ${originalText}`;
             // 提取段落文本，保持原文结构
             const paragraphs = [];
 
-            // 首先使用TreeWalker查找所有文本节点（最全面的方法）
-            const walker = document.createTreeWalker(
+            // 直接查找所有块级元素（最可靠的方法）
+            const blockElements = doc.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, td, th, blockquote');
+
+            blockElements.forEach((element, index) => {
+                const rawText = element.textContent;
+                const trimText = rawText.trim();
+
+                if (trimText.length >= 1) {
+                    paragraphs.push({
+                        element: element,
+                        originalText: trimText,
+                        rawText: rawText,
+                        index: index,
+                        skipReason: null
+                    });
+                }
+            });
+
+            // 统计文本节点数量（用于调试）
+            const textWalker = document.createTreeWalker(
                 doc.body,
                 NodeFilter.SHOW_TEXT,
                 {
                     acceptNode: function(node) {
-                        const textContent = node.textContent;
-                        // 只要有实际文本内容就接受
-                        if (!textContent || textContent.trim().length === 0) {
-                            return NodeFilter.FILTER_REJECT;
-                        }
-                        const parent = node.parentElement;
-                        if (parent) {
-                            const tagName = parent.tagName.toUpperCase();
-                            // 跳过script和style
-                            if (tagName === 'SCRIPT' || tagName === 'STYLE') {
-                                return NodeFilter.FILTER_REJECT;
-                            }
-                        }
-                        return NodeFilter.FILTER_ACCEPT;
+                        return node.textContent && node.textContent.trim().length > 0
+                            ? NodeFilter.FILTER_ACCEPT
+                            : NodeFilter.FILTER_REJECT;
                     }
                 },
                 false
             );
 
-            // 收集所有文本节点的父元素
-            const parentElements = new Set();
-            let node;
             let totalTextNodes = 0;
-            while (node = walker.nextNode()) {
+            let textNode;
+            while (textNode = textWalker.nextNode()) {
                 totalTextNodes++;
-                const parent = node.parentElement;
-                if (parent) {
-                    parentElements.add(parent);
+            }
+
+            addLog(`找到 ${paragraphs.length} 个段落 (共 ${totalTextNodes} 个文本节点)`);
+
+            // 如果没有找到任何段落，直接返回原始内容（避免序列化导致内容丢失）
+            if (paragraphs.length === 0) {
+                addLog(`  -> 未找到可翻译内容，直接使用原始内容`);
+                // 仍然需要处理竖排转换
+                let result = text;
+                const convertCheckbox = document.getElementById('convertToHorizontal');
+                if (convertCheckbox && convertCheckbox.checked) {
+                    result = convertVerticalToHorizontal(text);
                 }
-            }
 
-            // 调试信息：显示找到了多少文本节点和父元素
-            if (totalTextNodes === 0) {
-                addLog(`  -> 调试: 未找到任何文本节点`);
-                // 尝试显示body的HTML结构（前200字符）
-                const bodyPreview = doc.body.innerHTML.substring(0, 200);
-                addLog(`  -> body内容预览: ${bodyPreview}...`);
-            }
+                // 调试：检查返回内容的长度
+                const resultParser = new DOMParser();
+                const resultDoc = resultParser.parseFromString(result, 'text/html');
+                const resultTextLength = resultDoc.body.textContent.trim().length;
+                const resultHtmlLength = resultDoc.body.innerHTML.trim().length;
+                addLog(`  -> 返回内容: 文本${resultTextLength}字, HTML${resultHtmlLength}字`);
 
-            // 从父元素中提取段落
-            if (parentElements.size > 0) {
-                parentElements.forEach((element, index) => {
-                    const text = element.textContent.trim();
-                    // 放宽过滤条件：只要有文本就保留
-                    if (text.length >= 1) {
-                        paragraphs.push({
-                            element: element,
-                            originalText: text,
-                            index: index
-                        });
-                    }
-                });
+                return result;
             }
-
-            addLog(`找到 ${paragraphs.length} 个段落 (来自 ${parentElements.size} 个父元素, 共 ${totalTextNodes} 个文本节点)`);
 
             // 智能合并：每300-500字一组，减少API调用次数
             const TARGET_MIN_LENGTH = 300;
@@ -2153,6 +2358,7 @@ ${originalText}`;
             const CONCURRENT_BATCHES = 30; // 提高并发数，提升翻译速度
             let translatedCount = 0;
             const maxRetries = 3;
+            const translationStartTime = Date.now();  // 记录翻译开始时间
 
             for (let batchStart = 0; batchStart < groupedParagraphs.length; batchStart += CONCURRENT_BATCHES) {
                 // 检查是否需要取消
@@ -2169,7 +2375,14 @@ ${originalText}`;
                     const originalText = group.combinedText;
 
                     // 跳过纯数字、标点或过短文本
-                    if (originalText.length < 1 || /^[\d\s\p{P}\p{S}]+$/u.test(originalText)) {
+                    if (originalText.length < 1) {
+                        // 记录跳过原因
+                        group.paragraphs.forEach(p => p.skipReason = '文本为空');
+                        return { success: true, skipped: true };
+                    }
+                    if (/^[\d\s\p{P}\p{S}]+$/u.test(originalText)) {
+                        // 记录跳过原因
+                        group.paragraphs.forEach(p => p.skipReason = '仅包含数字/标点符号');
                         return { success: true, skipped: true };
                     }
 
@@ -2249,11 +2462,16 @@ ${originalText}`;
                                 translatedText.substring(0, 200) + (translatedText.length > 200 ? '...' : '')
                             );
 
-                            // 统计token消耗
+                            // 统计token消耗（用于费用估算）
                             const inputTokens = estimateTokens(translatePrompt);
                             const outputTokens = estimateTokens(translatedText);
                             totalInputTokens += inputTokens;
                             totalOutputTokens += outputTokens;
+
+                            // 统计原文和译文字数（用于显示）
+                            totalSourceChars += originalText.trim().length;
+                            totalTranslatedChars += translatedText.trim().length;
+
                             updateTokenDisplay();
 
                             return { success: true, translated: true, groupCount: group.count };
@@ -2277,12 +2495,17 @@ ${originalText}`;
                 // 统计结果
                 results.forEach((result, index) => {
                     const groupIndex = batchStart + index + 1;
+                    const group = batch[index];
+
                     if (result.success) {
                         if (!result.skipped) {
                             translatedCount += result.groupCount || 1;
                         }
                     } else {
-                        addLog(`第 ${groupIndex} 组翻译失败: ${result.error}`, true);
+                        const errorMsg = result.error || '未知错误';
+                        addLog(`第 ${groupIndex} 组翻译失败: ${errorMsg}`, true);
+                        // 记录失败原因到所有段落
+                        group.paragraphs.forEach(p => p.skipReason = `API翻译失败: ${errorMsg}`);
                     }
                 });
 
@@ -2299,6 +2522,13 @@ ${originalText}`;
 
             addLog(`✓ 翻译完成！共翻译 ${translatedCount} 个段落`);
 
+            // 计算翻译时长
+            translationEndTime = Date.now();
+            const translationDuration = translationEndTime - translationStartTime;
+            const durationSeconds = translationDuration / 1000;
+            addLog(`翻译时长: ${formatDuration(durationSeconds)}`);
+            updateTokenDisplay();
+
             // 详细统计：检查有多少段落被翻译
             const totalParagraphs = paragraphs.length;
             const translatedParagraphs = paragraphs.filter(p => p.translatedText && p.translatedText !== p.originalText).length;
@@ -2312,7 +2542,8 @@ ${originalText}`;
                 addLog(`⚠️ 未翻译段落 (共${unchangedParagraphs}段):`);
                 unchangedExamples.forEach((p, idx) => {
                     const preview = p.originalText.substring(0, 100) + (p.originalText.length > 100 ? '...' : '');
-                    addLog(`  ${idx + 1}. [${p.originalText.length}字] "${preview}"`);
+                    const reason = p.skipReason ? ` - 原因: ${p.skipReason}` : '';
+                    addLog(`  ${idx + 1}. [${p.originalText.length}字] "${preview}"${reason}`);
                 });
             }
 
@@ -2326,14 +2557,48 @@ ${originalText}`;
             paragraphs.forEach(para => {
                 if (para.translatedText && para.translatedText !== para.originalText) {
                     // 根据段落类型进行替换
-                    if (para.element) {
-                        // 块级元素：替换整个元素的文本内容
-                        para.element.textContent = para.translatedText;
-                    } else if (para.textNode) {
-                        // 文本节点：直接替换
-                        para.textNode.textContent = para.translatedText;
+                    if (para.textNode) {
+                        // 如果有textNode引用，保留原始空白格式
+                        if (para.rawText !== undefined) {
+                            // 提取前导和尾随空白
+                            const leadingWhitespace = para.rawText.match(/^\s*/)[0];
+                            const trailingWhitespace = para.rawText.match(/\s*$/)[0];
+                            // 替换时保留空白
+                            para.textNode.textContent = leadingWhitespace + para.translatedText + trailingWhitespace;
+                        } else {
+                            para.textNode.textContent = para.translatedText;
+                        }
+                        replacedCount++;
+                    } else if (para.element) {
+                        // 对于element，需要替换其中的文本
+                        // 保留空白格式
+                        let finalText = para.translatedText;
+                        if (para.rawText !== undefined) {
+                            const leadingWhitespace = para.rawText.match(/^\s*/)[0];
+                            const trailingWhitespace = para.rawText.match(/\s*$/)[0];
+                            finalText = leadingWhitespace + para.translatedText + trailingWhitespace;
+                        }
+
+                        // 检查element内部的结构
+                        const spans = para.element.querySelectorAll('span');
+                        const originalHTML = para.element.innerHTML;
+
+                        // 如果只有一个span且它包含所有文本，只替换span
+                        if (spans.length === 1 && spans[0].textContent.trim() === para.originalText) {
+                            spans[0].textContent = finalText;
+                        } else if (spans.length > 1) {
+                            // 如果有多个span，说明textContent被分割了
+                            // 最简单的方法是：用textContent替换整个element
+                            // 这会保留外层<p>标签，但内部的<span>结构会被简化
+                            para.element.textContent = finalText;
+                        } else {
+                            // 没有span或其他复杂结构，直接替换textContent
+                            para.element.textContent = finalText;
+                        }
+                        replacedCount++;
+                    } else {
+                        skippedCount++;
                     }
-                    replacedCount++;
                 } else {
                     skippedCount++;
                 }
