@@ -485,6 +485,110 @@
 
     <script>
         // ============================================
+        // 配置常量
+        // ============================================
+        const CONFIG = {
+            TRANSLATION: {
+                CONCURRENT_BATCHES: 30,
+                MIN_LENGTH: 300,
+                MAX_LENGTH: 500,
+                MAX_RETRIES: 3,
+                RETRY_DELAY: 1000
+            },
+            FILE: {
+                MAX_SIZE: 100 * 1024 * 1024, // 100MB
+                SUPPORTED_TYPES: ['.epub'],
+                PARALLEL_PROCESSING: 5, // 并行处理文件数
+                LOG_BATCH_SIZE: 10, // 批量更新日志数量
+                LOG_UPDATE_DELAY: 100 // 日志更新延迟(ms)
+            }
+        };
+
+        // ============================================
+        // 工具函数 - 安全防护
+        // ============================================
+
+        /**
+         * HTML 转义，防止 XSS 攻击
+         */
+        function escapeHTML(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        /**
+         * 安全地设置 HTML 内容
+         */
+        function setSafeHTML(element, html) {
+            // 只转义插入的文本内容，保留 HTML 标签
+            const temp = document.createElement('div');
+            temp.innerHTML = html;
+
+            // 验证没有 script 标签或事件处理器
+            const hasScript = temp.querySelector('script');
+            const hasEventHandler = html.match(/on\w+\s*=/i);
+
+            if (hasScript || hasEventHandler) {
+                console.warn('检测到潜在的恶意内容，已拦截');
+                element.textContent = temp.textContent;
+            } else {
+                element.innerHTML = html;
+            }
+        }
+
+        // ============================================
+        // 工具函数 - 日志系统优化
+        // ============================================
+
+        const logBuffer = [];
+        let logTimeout = null;
+
+        /**
+         * 批量日志更新 - 减少 DOM 操作
+         */
+        function addLog(message, isError = false) {
+            logBuffer.push({
+                message: message,
+                isError: isError,
+                timestamp: Date.now()
+            });
+
+            // 达到批量大小或超过延迟时间时刷新
+            if (logBuffer.length >= CONFIG.FILE.LOG_BATCH_SIZE) {
+                flushLogs();
+            } else {
+                clearTimeout(logTimeout);
+                logTimeout = setTimeout(flushLogs, CONFIG.FILE.LOG_UPDATE_DELAY);
+            }
+        }
+
+        /**
+         * 刷新日志缓冲区到 DOM
+         */
+        function flushLogs() {
+            if (logBuffer.length === 0) return;
+
+            const logsHtml = logBuffer.map(log => {
+                const className = log.isError ? 'text-red-600' : 'text-gray-600';
+                return `<div class="${className}">> ${escapeHTML(log.message)}</div>`;
+            }).join('');
+
+            elements.progressLog.insertAdjacentHTML('beforeend', logsHtml);
+            elements.progressLog.scrollTop = elements.progressLog.scrollHeight;
+
+            logBuffer.length = 0;
+        }
+
+        /**
+         * 强制刷新所有待处理的日志
+         */
+        function flushAllLogs() {
+            clearTimeout(logTimeout);
+            flushLogs();
+        }
+
+        // ============================================
         // EPUB 翻译工具 - 核心功能模块
         // ============================================
 
@@ -1281,8 +1385,9 @@
                             );
 
                             if (normalSpan && normalSpan.className) {
-                                // 使用普通span的样式
-                                para.element.innerHTML = `<span class="${normalSpan.className}">${para.translatedText}</span>`;
+                                // 使用普通span的样式 - 安全设置 HTML
+                                const safeHTML = `<span class="${normalSpan.className}">${escapeHTML(para.translatedText)}</span>`;
+                                setSafeHTML(para.element, safeHTML);
                             } else {
                                 // 没有普通样式，直接设置文本
                                 para.element.textContent = para.translatedText;
@@ -1290,7 +1395,8 @@
                         } else {
                             // 没有首字母下沉，保留第一个span的样式
                             if (spans[0].className) {
-                                para.element.innerHTML = `<span class="${spans[0].className}">${para.translatedText}</span>`;
+                                const safeHTML = `<span class="${spans[0].className}">${escapeHTML(para.translatedText)}</span>`;
+                                setSafeHTML(para.element, safeHTML);
                             } else {
                                 para.element.textContent = para.translatedText;
                             }
@@ -1323,11 +1429,12 @@
                             translatedHeading = headingText;
                         }
 
-                        // 保留标题的HTML结构，只替换文本节点
+                        // 保留标题的HTML结构，只替换文本节点 - 安全处理
                         const spans = heading.querySelectorAll('span');
                         if (spans.length > 0 && spans[0].className) {
-                            // 有span标签，保留样式
-                            heading.innerHTML = `<span class="${spans[0].className}">${translatedHeading}</span>`;
+                            // 有span标签，保留样式 - 使用安全函数
+                            const safeHTML = `<span class="${spans[0].className}">${escapeHTML(translatedHeading)}</span>`;
+                            setSafeHTML(heading, safeHTML);
                         } else {
                             // 没有span标签，直接设置文本
                             heading.textContent = translatedHeading;
@@ -1641,27 +1748,13 @@ ${text}`;
                 state.translatedEpub = new JSZip();
                 let processedFiles = 0;
 
+                // 首先处理非HTML文件
                 for (const filename of files) {
-                    if (state.shouldCancel) {
-                        addLog('⚠️ 翻译已取消', true);
-                        break;
-                    }
+                    if (state.shouldCancel) break;
 
                     const file = state.epubZip.files[filename];
-
-                    if (!file.dir) {
-                        if (filename.endsWith('.html') || filename.endsWith('.xhtml')) {
-                            processedFiles++;
-                            const progress = Math.round((processedFiles / totalHtmlFiles) * 100);
-                            updateProgress(`正在翻译 (${processedFiles}/${totalHtmlFiles}): ${filename}`, progress);
-                            addLog(`[${processedFiles}/${totalHtmlFiles}] 处理文件: ${filename}`);
-
-                            const textContent = await file.async('string');
-                            const translatedText = await translateHTMLContent(textContent, sourceLang, targetLang, service);
-
-                            await state.translatedEpub.file(filename, translatedText);
-                        } else if (filename.endsWith('.opf') || filename.endsWith('.ncx') || filename.endsWith('.css')) {
-                            // 处理OPF、NCX和CSS文件 - 需要转换竖排属性
+                    if (!file.dir && !filename.endsWith('.html') && !filename.endsWith('.xhtml')) {
+                        if (filename.endsWith('.opf') || filename.endsWith('.ncx') || filename.endsWith('.css')) {
                             addLog(`  -> 处理配置文件: ${filename}`);
                             const textContent = await file.async('string');
                             const convertedContent = convertVerticalToHorizontal(textContent);
@@ -1671,6 +1764,52 @@ ${text}`;
                             await state.translatedEpub.file(filename, await file.async('arraybuffer'));
                         }
                     }
+                }
+
+                // 并行处理HTML文件
+                addLog(`开始并行翻译 ${totalHtmlFiles} 个HTML文件...`);
+
+                // 将文件分批处理
+                const chunks = [];
+                const PARALLEL_COUNT = CONFIG.FILE.PARALLEL_PROCESSING;
+                for (let i = 0; i < htmlFiles.length; i += PARALLEL_COUNT) {
+                    chunks.push(htmlFiles.slice(i, i + PARALLEL_COUNT));
+                }
+
+                // 处理每一批文件
+                for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+                    if (state.shouldCancel) {
+                        addLog('⚠️ 翻译已取消', true);
+                        break;
+                    }
+
+                    const chunk = chunks[chunkIndex];
+                    const chunkStart = chunkIndex * PARALLEL_COUNT + 1;
+                    const chunkEnd = Math.min(chunkStart + chunk.length - 1, totalHtmlFiles);
+
+                    // 并行翻译当前批次的所有文件
+                    const results = await Promise.all(chunk.map(async (filename) => {
+                        if (state.shouldCancel) return null;
+
+                        const file = state.epubZip.files[filename];
+                        const textContent = await file.async('string');
+                        const translatedText = await translateHTMLContent(textContent, sourceLang, targetLang, service);
+
+                        return { filename, translatedText };
+                    }));
+
+                    // 保存翻译结果
+                    for (const result of results) {
+                        if (result && result.translatedText) {
+                            await state.translatedEpub.file(result.filename, result.translatedText);
+                            processedFiles++;
+                        }
+                    }
+
+                    // 更新进度
+                    const progress = Math.round((processedFiles / totalHtmlFiles) * 100);
+                    updateProgress(`正在翻译 (${processedFiles}/${totalHtmlFiles})`, progress);
+                    flushAllLogs(); // 确保所有日志都已显示
                 }
 
                 if (!state.shouldCancel) {
