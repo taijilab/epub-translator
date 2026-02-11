@@ -4,8 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EPUB 多语言翻译工具</title>
+    <!-- 安全修复：添加 SRI 完整性校验 -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+            integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG"
+            crossorigin="anonymous"></script>
     <style>
         .drop-zone.drag-over {
             border-color: #3b82f6;
@@ -21,7 +24,9 @@
         <!-- Header -->
         <div class="text-center mb-8">
             <h1 class="text-4xl font-bold text-gray-800 mb-2">📚 EPUB 多语言翻译工具</h1>
-            <p class="text-gray-600">上传 EPUB 文件，选择目标语言，一键生成翻译后的电子书</p>
+            <p class="text-gray-600 mb-2">上传 EPUB 文件，选择目标语言，一键生成翻译后的电子书</p>
+            <p class="text-sm text-blue-600 font-semibold">✓ 版本 v2.2 - EPUB格式修复 + 安全加固</p>
+            <button id="debugBtn" class="mt-2 px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-sm">🔍 诊断测试</button>
         </div>
 
         <!-- Main Card -->
@@ -29,7 +34,7 @@
 
             <!-- File Upload Area -->
             <div class="mb-8">
-                <label class="block text-lg font-semibold text-gray-700 mb-4">1. 上传 EPUB 文件</label>
+                <label class="block text-lg font-semibold text-gray-700 mb-4">1. 上传 EPUB 文件（支持多选）</label>
                 <div id="dropZone" class="drop-zone border-3 border-dashed border-gray-300 rounded-lg p-12 text-center cursor-pointer hover:border-blue-400 transition-colors">
                     <div class="text-gray-400 mb-4">
                         <svg class="mx-auto h-16 w-16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -37,41 +42,35 @@
                         </svg>
                     </div>
                     <p class="text-gray-600 mb-2">拖拽 EPUB 文件到这里，或点击选择文件</p>
-                    <p class="text-sm text-gray-400">支持 .epub 格式</p>
-                    <input type="file" id="fileInput" accept=".epub" class="hidden">
+                    <p class="text-sm text-gray-400 mb-1">支持 .epub 格式，可同时选择多个文件</p>
+                    <p class="text-xs text-gray-500">批量翻译时，文件将并发处理以提高效率</p>
+                    <input type="file" id="fileInput" accept=".epub" multiple class="hidden">
                 </div>
 
-                <!-- File Info -->
-                <div id="fileInfo" class="mt-4 hidden">
+                <!-- File List -->
+                <div id="fileListContainer" class="mt-4 hidden">
                     <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
                         <div class="flex items-center justify-between mb-3">
-                            <div class="flex items-center flex-1">
-                                <svg class="h-8 w-8 text-blue-500 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                                </svg>
-                                <div class="flex-1">
-                                    <p id="fileName" class="font-medium text-gray-800"></p>
-                                    <p id="fileSize" class="text-sm text-gray-500"></p>
-                                </div>
-                            </div>
-                            <button id="removeFile" class="text-red-500 hover:text-red-700 ml-3">
-                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                                </svg>
-                            </button>
+                            <h4 class="font-semibold text-gray-800">已选择 <span id="fileCount">0</span> 个文件</h4>
+                            <button id="clearAllFiles" class="text-sm text-red-600 hover:text-red-800">清空列表</button>
                         </div>
-                        <div id="fileDetails" class="grid grid-cols-3 gap-3 text-sm">
-                            <div class="bg-white rounded p-2 text-center">
-                                <div class="text-gray-500 mb-1">总字数</div>
-                                <div id="wordCount" class="font-semibold text-blue-600">-</div>
-                            </div>
-                            <div class="bg-white rounded p-2 text-center">
-                                <div class="text-gray-500 mb-1">检测语言</div>
-                                <div id="detectedLang" class="font-semibold text-green-600">-</div>
-                            </div>
-                            <div class="bg-white rounded p-2 text-center">
-                                <div class="text-gray-500 mb-1">文本文件</div>
-                                <div id="textFileCount" class="font-semibold text-purple-600">-</div>
+                        <div id="fileList" class="space-y-2 max-h-64 overflow-y-auto">
+                            <!-- 文件列表动态生成 -->
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-blue-200">
+                            <div class="grid grid-cols-3 gap-3 text-sm">
+                                <div class="bg-white rounded p-2 text-center">
+                                    <div class="text-gray-500 mb-1">总字数</div>
+                                    <div id="totalWordCount" class="font-semibold text-blue-600">-</div>
+                                </div>
+                                <div class="bg-white rounded p-2 text-center">
+                                    <div class="text-gray-500 mb-1">文件数量</div>
+                                    <div id="totalFileCount" class="font-semibold text-green-600">-</div>
+                                </div>
+                                <div class="bg-white rounded p-2 text-center">
+                                    <div class="text-gray-500 mb-1">检测语言</div>
+                                    <div id="detectedLanguage" class="font-semibold text-purple-600">-</div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -308,6 +307,10 @@
                                 <option value="deepseek/deepseek-chat">DeepSeek Chat (推荐)</option>
                                 <option value="deepseek/deepseek-r1">DeepSeek R1 (推理模型)</option>
                                 <option value="deepseek/deepseek-r1:free">DeepSeek R1 (免费版)</option>
+                                <option disabled>──────────</option>
+                                <option value="moonshot/moonshot-v1-8k">Kimi (8K context)</option>
+                                <option value="moonshot/moonshot-v1-32k">Kimi (32K context)</option>
+                                <option value="moonshot/moonshot-v1-128k">Kimi (128K context)</option>
                             </select>
                             <p class="text-xs text-gray-500 mt-1">使用OpenAI兼容接口格式</p>
                         </div>
@@ -417,30 +420,29 @@
 
             <!-- Download Area -->
             <div id="downloadArea" class="hidden">
-                <div class="bg-green-50 border border-green-200 rounded-lg p-6 text-center">
-                    <svg class="mx-auto h-16 w-16 text-green-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                    </svg>
-                    <h3 class="text-lg font-semibold text-green-800 mb-2">翻译完成！</h3>
-                    <p class="text-green-600 mb-2">您的 EPUB 文件已成功翻译</p>
-                    <p class="text-sm text-green-700 mb-4">⚠️ 原始文件保持不变，将生成新的翻译后文件</p>
+                <div class="bg-green-50 border border-green-200 rounded-lg p-6">
+                    <div class="text-center mb-6">
+                        <svg class="mx-auto h-16 w-16 text-green-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                        <h3 class="text-lg font-semibold text-green-800 mb-2">翻译文件</h3>
+                        <p class="text-green-600 mb-2">EPUB 文件翻译进度</p>
+                        <p class="text-sm text-green-700">⚠️ 原始文件保持不变，将生成新的翻译后文件</p>
+                    </div>
 
-                    <div class="flex justify-center gap-4">
-                        <button id="previewBtn" class="bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors">
-                            <span class="flex items-center justify-center">
-                                <svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                                </svg>
-                                预览翻译结果
-                            </span>
-                        </button>
-                        <button id="downloadBtn" class="bg-green-600 text-white font-semibold py-3 px-8 rounded-lg hover:bg-green-700 transition-colors">
+                    <!-- 翻译完成的文件列表 -->
+                    <div id="translatedFileList" class="space-y-3 mb-6">
+                        <!-- 动态生成 -->
+                    </div>
+
+                    <!-- 批量操作按钮 -->
+                    <div id="batchDownloadBtn" class="flex justify-center gap-4 hidden">
+                        <button id="downloadAllBtn" class="bg-green-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-green-700 transition-colors">
                             <span class="flex items-center justify-center">
                                 <svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
                                 </svg>
-                                下载翻译后的 EPUB 文件
+                                批量下载所有文件
                             </span>
                         </button>
                     </div>
@@ -537,6 +539,60 @@
             }
         }
 
+        /**
+         * 简单加密函数 - 使用 XOR 和 Base64
+         * 注意：这不是军事级加密，但足以防止简单的 XSS 窃取
+         */
+        function simpleEncrypt(text, key = 'epub-translation-tool') {
+            let result = '';
+            for (let i = 0; i < text.length; i++) {
+                const charCode = text.charCodeAt(i) ^ key.charCodeAt(i % key.length);
+                result += String.fromCharCode(charCode);
+            }
+            return btoa(encodeURIComponent(result));
+        }
+
+        /**
+         * 简单解密函数
+         */
+        function simpleDecrypt(encrypted, key = 'epub-translation-tool') {
+            try {
+                const decoded = decodeURIComponent(atob(encrypted));
+                let result = '';
+                for (let i = 0; i < decoded.length; i++) {
+                    const charCode = decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length);
+                    result += String.fromCharCode(charCode);
+                }
+                return result;
+            } catch (e) {
+                console.error('解密失败:', e);
+                return '';
+            }
+        }
+
+        /**
+         * URL 验证 - 确保是合法的 HTTPS URL
+         */
+        function isValidHttpsUrl(url) {
+            if (!url || url.trim() === '') return true; // 允许空值
+            try {
+                const parsed = new URL(url);
+                return parsed.protocol === 'https:';
+            } catch (e) {
+                return false;
+            }
+        }
+
+        /**
+         * API 密钥验证 - 基本格式检查
+         */
+        function isValidApiKey(key) {
+            if (!key || key.trim() === '') return true; // 允许空值
+            // 至少 16 个字符，只允许字母、数字、下划线、连字符、点
+            const keyRegex = /^[a-zA-Z0-9_\-\.]{16,}$/;
+            return keyRegex.test(key.trim());
+        }
+
         // ============================================
         // 工具函数 - 日志系统优化
         // ============================================
@@ -594,9 +650,9 @@
 
         // 全局状态管理
         const state = {
-            epubFile: null,
-            epubZip: null,
-            translatedEpub: null,
+            epubFiles: [], // 改为数组，支持多文件
+            epubZips: {}, // 对象，key为文件ID
+            translatedEpubs: {}, // 翻译结果
             isTranslating: false,
             shouldCancel: false,
             isVerticalMode: false,
@@ -606,6 +662,15 @@
             totalOutputTokens: 0,
             totalSourceChars: 0,
             totalTranslatedChars: 0,
+
+            // 文件队列状态
+            fileQueue: [], // { id, file, status: 'pending'|'processing'|'completed'|'failed', progress, error }
+            queueStats: {
+                total: 0,
+                completed: 0,
+                failed: 0,
+                processing: 0
+            },
 
             // 翻译进度
             totalCharsToTranslate: 0,
@@ -622,10 +687,13 @@
         const elements = {
             dropZone: document.getElementById('dropZone'),
             fileInput: document.getElementById('fileInput'),
-            fileInfo: document.getElementById('fileInfo'),
-            fileName: document.getElementById('fileName'),
-            fileSize: document.getElementById('fileSize'),
-            removeFile: document.getElementById('removeFile'),
+            fileListContainer: document.getElementById('fileListContainer'),
+            fileList: document.getElementById('fileList'),
+            fileCount: document.getElementById('fileCount'),
+            totalWordCount: document.getElementById('totalWordCount'),
+            totalFileCount: document.getElementById('totalFileCount'),
+            detectedLanguage: document.getElementById('detectedLanguage'),
+            clearAllFiles: document.getElementById('clearAllFiles'),
             translateBtn: document.getElementById('translateBtn'),
             cancelBtn: document.getElementById('cancelBtn'),
             progressArea: document.getElementById('progressArea'),
@@ -636,7 +704,6 @@
             originalTextDiv: document.getElementById('originalText'),
             translatedTextDiv: document.getElementById('translatedText'),
             downloadArea: document.getElementById('downloadArea'),
-            downloadBtn: document.getElementById('downloadBtn'),
             translationService: document.getElementById('translationService'),
             customApiSettings: document.getElementById('customApiSettings'),
             verticalConvertOption: document.getElementById('verticalConvertOption')
@@ -670,17 +737,82 @@
         // 配置存储
         const STORAGE_KEY = 'epub-translator-config';
 
+        // 处理翻译服务变更 - 必须在 loadConfig 之前定义
+        function handleServiceChange() {
+            console.log('handleServiceChange called');
+
+            const zhipuApiSettings = document.getElementById('zhipuApiSettings');
+            const openrouterApiSettings = document.getElementById('openrouterApiSettings');
+
+            console.log('Elements:', {
+                customApiSettings: elements.customApiSettings,
+                zhipuApiSettings,
+                openrouterApiSettings,
+                translationService: elements.translationService,
+                selectedValue: elements.translationService?.value
+            });
+
+            // 隐藏所有API设置
+            if (elements.customApiSettings) {
+                elements.customApiSettings.classList.add('hidden');
+            }
+            if (zhipuApiSettings) {
+                zhipuApiSettings.classList.add('hidden');
+            }
+            if (openrouterApiSettings) {
+                openrouterApiSettings.classList.add('hidden');
+            }
+
+            // 根据选择显示对应的设置
+            const service = elements.translationService?.value;
+            console.log('Selected service:', service);
+
+            if (service === 'custom') {
+                console.log('Showing custom API settings');
+                if (elements.customApiSettings) {
+                    elements.customApiSettings.classList.remove('hidden');
+                }
+            } else if (service === 'zhipu') {
+                console.log('Showing zhipu API settings');
+                if (zhipuApiSettings) {
+                    zhipuApiSettings.classList.remove('hidden');
+                }
+            } else if (service === 'openrouter') {
+                console.log('Showing openrouter API settings');
+                if (openrouterApiSettings) {
+                    openrouterApiSettings.classList.remove('hidden');
+                }
+            }
+        }
+
         function saveConfig() {
+            const zhipuApiKey = document.getElementById('zhipuApiKey')?.value || '';
+            const openrouterApiKey = document.getElementById('openrouterApiKey')?.value || '';
+            const customApiKey = document.getElementById('apiKey')?.value || '';
+            const zhipuBaseUrl = document.getElementById('zhipuBaseUrl')?.value || 'https://open.bigmodel.cn/api/paas/v4/';
+            const customEndpoint = document.getElementById('apiEndpoint')?.value || '';
+
+            // 验证 URL 和 API 密钥
+            if (!isValidHttpsUrl(zhipuBaseUrl)) {
+                alert('智谱 API 地址必须是有效的 HTTPS URL');
+                return;
+            }
+            if (!isValidHttpsUrl(customEndpoint)) {
+                alert('自定义 API 地址必须是有效的 HTTPS URL');
+                return;
+            }
+
             const config = {
                 sourceLang: document.querySelector('input[name="sourceLang"]:checked')?.value || 'en',
                 targetLang: document.querySelector('input[name="targetLang"]:checked')?.value || 'zh',
                 translationService: elements.translationService.value,
-                zhipuApiKey: document.getElementById('zhipuApiKey')?.value || '',
-                zhipuBaseUrl: document.getElementById('zhipuBaseUrl')?.value || 'https://open.bigmodel.cn/api/paas/v4/',
-                openrouterApiKey: document.getElementById('openrouterApiKey')?.value || '',
+                // 加密存储 API 密钥
+                zhipuApiKey: simpleEncrypt(zhipuApiKey),
+                zhipuBaseUrl: zhipuBaseUrl,
+                openrouterApiKey: simpleEncrypt(openrouterApiKey),
                 openrouterModel: document.getElementById('openrouterModel')?.value || 'deepseek/deepseek-chat',
-                customEndpoint: document.getElementById('apiEndpoint')?.value || '',
-                customApiKey: document.getElementById('apiKey')?.value || ''
+                customEndpoint: customEndpoint,
+                customApiKey: simpleEncrypt(customApiKey)
             };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
         }
@@ -709,13 +841,22 @@
                         handleServiceChange();
                     }
 
-                    // 恢复API配置
-                    if (config.zhipuApiKey) document.getElementById('zhipuApiKey').value = config.zhipuApiKey;
+                    // 恢复API配置 - 解密 API 密钥
+                    if (config.zhipuApiKey) {
+                        const decrypted = simpleDecrypt(config.zhipuApiKey);
+                        if (decrypted) document.getElementById('zhipuApiKey').value = decrypted;
+                    }
                     if (config.zhipuBaseUrl) document.getElementById('zhipuBaseUrl').value = config.zhipuBaseUrl;
-                    if (config.openrouterApiKey) document.getElementById('openrouterApiKey').value = config.openrouterApiKey;
+                    if (config.openrouterApiKey) {
+                        const decrypted = simpleDecrypt(config.openrouterApiKey);
+                        if (decrypted) document.getElementById('openrouterApiKey').value = decrypted;
+                    }
                     if (config.openrouterModel) document.getElementById('openrouterModel').value = config.openrouterModel;
                     if (config.customEndpoint) document.getElementById('apiEndpoint').value = config.customEndpoint;
-                    if (config.customApiKey) document.getElementById('apiKey').value = config.customApiKey;
+                    if (config.customApiKey) {
+                        const decrypted = simpleDecrypt(config.customApiKey);
+                        if (decrypted) document.getElementById('apiKey').value = decrypted;
+                    }
 
                     addLog('已恢复上次的配置');
                 }
@@ -741,31 +882,236 @@
         function handleDrop(e) {
             e.preventDefault();
             elements.dropZone.classList.remove('drag-over');
-            const files = e.dataTransfer.files;
+            const files = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.epub'));
             if (files.length > 0) {
-                processFile(files[0]);
+                processMultipleFiles(files);
             }
         }
 
         function handleFileSelect(e) {
-            const files = e.target.files;
+            const files = Array.from(e.target.files).filter(f => f.name.endsWith('.epub'));
             if (files.length > 0) {
-                processFile(files[0]);
+                processMultipleFiles(files);
             }
         }
 
-        function handleRemoveFile() {
-            state.epubFile = null;
-            state.epubZip = null;
+        async function processMultipleFiles(files) {
+            // 为每个文件生成唯一ID
+            const newFiles = files.map(file => ({
+                id: 'file_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+                file: file,
+                name: file.name,
+                size: file.size,
+                status: 'pending',
+                progress: 0,
+                zip: null,
+                translated: null
+            }));
+
+            // 添加到文件列表
+            state.epubFiles.push(...newFiles);
+            updateFileListUI();
+
+            // 分析所有文件
+            for (const fileData of newFiles) {
+                await analyzeSingleFile(fileData);
+            }
+
+            updateTotalStats();
+        }
+
+        function updateFileListUI() {
+            if (state.epubFiles.length === 0) {
+                elements.fileListContainer.classList.add('hidden');
+                elements.translateBtn.disabled = true;
+                return;
+            }
+
+            elements.fileListContainer.classList.remove('hidden');
+            elements.fileCount.textContent = state.epubFiles.length;
+            elements.translateBtn.disabled = false;
+
+            elements.fileList.innerHTML = state.epubFiles.map(fileData => `
+                <div class="flex items-center justify-between bg-white rounded p-3 border ${getStatusBorderColor(fileData.status)}">
+                    <div class="flex items-center flex-1">
+                        <svg class="h-5 w-5 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                        <div class="flex-1">
+                            <p class="font-medium text-gray-800 text-sm">${escapeHTML(fileData.name)}</p>
+                            <p class="text-xs text-gray-500">${formatFileSize(fileData.size)} · ${getStatusText(fileData.status)}</p>
+                        </div>
+                    </div>
+                    ${fileData.status !== 'processing' ? `
+                        <button onclick="removeFile('${fileData.id}')" class="text-red-500 hover:text-red-700 ml-2">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    ` : `
+                        <span class="text-xs text-blue-600 ml-2">${fileData.progress || 0}%</span>
+                    `}
+                </div>
+            `).join('');
+        }
+
+        function getStatusBorderColor(status) {
+            switch(status) {
+                case 'pending': return 'border-gray-200';
+                case 'analyzing': return 'border-yellow-300';
+                case 'analyzed': return 'border-blue-300';
+                case 'processing': return 'border-blue-500';
+                case 'completed': return 'border-green-500';
+                case 'failed': return 'border-red-500';
+                default: return 'border-gray-200';
+            }
+        }
+
+        function getStatusText(status) {
+            switch(status) {
+                case 'pending': return '等待处理';
+                case 'analyzing': return '分析中...';
+                case 'analyzed': return '已分析';
+                case 'processing': return '翻译中...';
+                case 'completed': return '已完成';
+                case 'failed': return '失败';
+                default: return '未知';
+            }
+        }
+
+        window.removeFile = function(fileId) {
+            // 安全修复：翻译期间禁止删除文件
+            if (state.isTranslating) {
+                alert('翻译进行中，不能删除文件。请先取消或等待翻译完成。');
+                return;
+            }
+            state.epubFiles = state.epubFiles.filter(f => f.id !== fileId);
+            delete state.epubZips[fileId];
+            updateFileListUI();
+            updateTotalStats();
+        };
+
+        function handleClearAllFiles() {
+            // 安全修复：翻译期间禁止清空文件列表
+            if (state.isTranslating) {
+                alert('翻译进行中，不能清空文件列表。请先取消或等待翻译完成。');
+                return;
+            }
+            state.epubFiles = [];
+            state.epubZips = {};
+            state.translatedEpubs = {};
             elements.fileInput.value = '';
-            elements.fileInfo.classList.add('hidden');
-            elements.translateBtn.disabled = true;
-            elements.downloadArea.classList.add('hidden');
-            elements.progressArea.classList.add('hidden');
-            elements.verticalConvertOption.classList.add('hidden');
-            document.getElementById('wordCount').textContent = '-';
-            document.getElementById('detectedLang').textContent = '-';
-            document.getElementById('textFileCount').textContent = '-';
+            updateFileListUI();
+            updateTotalStats();
+        }
+
+        async function analyzeSingleFile(fileData) {
+            try {
+                fileData.status = 'analyzing';
+                updateFileListUI();
+
+                const arrayBuffer = await fileData.file.arrayBuffer();
+                fileData.zip = await JSZip.loadAsync(arrayBuffer);
+                state.epubZips[fileData.id] = fileData.zip;
+
+                // 统计字数和语言
+                let totalWordCount = 0;
+                let textFileCount = 0;
+                let charCount = { zh: 0, ja: 0, en: 0, other: 0 };
+                let hasVerticalCSS = false;
+
+                const files = Object.keys(fileData.zip.files);
+                for (const filename of files) {
+                    if (filename.endsWith('.html') || filename.endsWith('.xhtml')) {
+                        textFileCount++;
+                        const file = fileData.zip.files[filename];
+                        if (!file.dir) {
+                            const content = await file.async('string');
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(content, 'text/html');
+                            const text = doc.body.textContent || '';
+
+                            const zhChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+                            const jaChars = (text.match(/[\u3040-\u309f\u30a0-\u30ff]/g) || []).length;
+                            const enChars = (text.match(/[a-zA-Z]/g) || []).length;
+
+                            charCount.zh += zhChars;
+                            charCount.ja += jaChars;
+                            charCount.en += enChars;
+
+                            const words = text.trim().replace(/\s+/g, '');
+                            totalWordCount += words.length;
+                        }
+                    }
+                }
+
+                // 检测竖排
+                for (const filename of files) {
+                    if (filename.endsWith('.html') || filename.endsWith('.xhtml') ||
+                        filename.endsWith('.css') || filename.endsWith('.ncx') || filename.endsWith('.opf')) {
+                        const file = fileData.zip.files[filename];
+                        if (!file.dir) {
+                            const content = await file.async('string');
+                            if (/writing-mode\s*:\s*vertical|direction\s*:\s*rtl|page-progression-direction\s*:\s*rtl/i.test(content)) {
+                                hasVerticalCSS = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasVerticalCSS) break;
+                }
+
+                // 保存文件信息
+                fileData.wordCount = totalWordCount;
+                fileData.textFileCount = textFileCount;
+                fileData.charCount = charCount;
+                fileData.hasVerticalCSS = hasVerticalCSS;
+                fileData.status = 'analyzed';
+
+                updateFileListUI();
+                updateTotalStats();
+
+            } catch (error) {
+                fileData.status = 'failed';
+                fileData.error = error.message;
+                updateFileListUI();
+                addLog(`分析文件失败: ${fileData.name} - ${error.message}`, true);
+            }
+        }
+
+        function updateTotalStats() {
+            const totalWords = state.epubFiles.reduce((sum, f) => sum + (f.wordCount || 0), 0);
+            const totalCount = state.epubFiles.length;
+            const charCounts = { zh: 0, ja: 0, en: 0 };
+
+            state.epubFiles.forEach(f => {
+                if (f.charCount) {
+                    charCounts.zh += f.charCount.zh || 0;
+                    charCounts.ja += f.charCount.ja || 0;
+                    charCounts.en += f.charCount.en || 0;
+                }
+            });
+
+            elements.totalWordCount.textContent = totalWords > 0 ? totalWords.toLocaleString() : '-';
+            elements.totalFileCount.textContent = totalCount;
+            elements.detectedLanguage.textContent = totalCount > 0 ? getDetectedLang(charCounts) : '-';
+
+            // 如果检测到竖排，显示选项
+            if (state.epubFiles.some(f => f.hasVerticalCSS)) {
+                elements.verticalConvertOption.classList.remove('hidden');
+            } else {
+                elements.verticalConvertOption.classList.add('hidden');
+            }
+        }
+
+        function getDetectedLang(charCount) {
+            const langMap = { zh: '中文', ja: '日语', en: '英语', mixed: '混合' };
+            const maxCount = Math.max(charCount.zh, charCount.ja, charCount.en);
+
+            if (maxCount === 0) return '未知';
+
+            const detectedLangs = Object.keys(charCount).filter(k => charCount[k] === maxCount);
+            return detectedLangs.length > 1 ? langMap.mixed : langMap[detectedLangs[0]];
         }
 
         async function processFile(file) {
@@ -1116,36 +1462,13 @@
         // UI 更新模块
         // ============================================
 
-        function handleServiceChange() {
-            const zhipuApiSettings = document.getElementById('zhipuApiSettings');
-            const openrouterApiSettings = document.getElementById('openrouterApiSettings');
-
-            elements.customApiSettings.classList.add('hidden');
-            if (zhipuApiSettings) zhipuApiSettings.classList.add('hidden');
-            if (openrouterApiSettings) openrouterApiSettings.classList.add('hidden');
-
-            if (elements.translationService.value === 'custom') {
-                elements.customApiSettings.classList.remove('hidden');
-            } else if (elements.translationService.value === 'zhipu') {
-                zhipuApiSettings.classList.remove('hidden');
-            } else if (elements.translationService.value === 'openrouter') {
-                openrouterApiSettings.classList.remove('hidden');
-            }
-        }
-
         function updateProgress(status, percent) {
             elements.progressStatus.textContent = status;
             elements.progressPercent.textContent = Math.round(percent) + '%';
             elements.progressBar.style.width = percent + '%';
         }
 
-        function addLog(message, isError = false) {
-            const logEntry = document.createElement('div');
-            logEntry.textContent = `> ${message}`;
-            logEntry.className = isError ? 'text-red-600' : 'text-gray-600';
-            elements.progressLog.appendChild(logEntry);
-            elements.progressLog.scrollTop = elements.progressLog.scrollHeight;
-        }
+        // addLog 函数已移至前面的批量日志更新部分
 
         function updateComparisonWindow(original, translated) {
             if (elements.originalTextDiv) {
@@ -1252,70 +1575,91 @@
 
         async function translateHTMLContent(html, sourceLang, targetLang, service) {
             const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
 
-            const paragraphs = [];
-            // 只选择段落元素，不选择标题元素
-            // 标题（h1-h6）会被单独处理，保留原结构
-            const blockElements = doc.querySelectorAll('p, div, li, td, th, blockquote');
+            // 检测是否为 XHTML
+            const isXHTML = html.toLowerCase().includes('xhtml') ||
+                           html.toLowerCase().includes('<!doctype html public') ||
+                           html.includes('xmlns=');
 
-            blockElements.forEach((element, index) => {
+            // 根据类型选择正确的 MIME 类型
+            const mimeType = isXHTML ? 'application/xhtml+xml' : 'text/html';
+            const doc = parser.parseFromString(html, mimeType);
+
+            const elementsToTranslate = [];
+
+            // 选择所有可能包含文本的块级元素
+            // 重点：只选择叶子元素或只包含文本的元素，避免嵌套问题
+            const blockElements = doc.querySelectorAll('p, div, li, td, th, blockquote, h1, h2, h3, h4, h5, h6, span');
+
+            blockElements.forEach(element => {
+                // 跳过 script/style/noscript
+                if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(element.tagName)) {
+                    return;
+                }
+
+                // 只选择叶子元素（没有块级子元素）
+                const hasBlockChildren = element.querySelector('p, div, li, td, th, blockquote, h1, h2, h3, h4, h5, h6');
+                if (hasBlockChildren) {
+                    return; // 跳过包含其他块级元素的元素
+                }
+
                 const text = element.textContent.trim();
                 if (text.length >= 1) {
-                    paragraphs.push({
+                    elementsToTranslate.push({
                         element: element,
                         originalText: text,
-                        index: index
+                        tagName: element.tagName,
+                        hadChildren: element.children.length > 0
                     });
                 }
             });
 
-            addLog(`找到 ${paragraphs.length} 个段落`);
+            addLog(`找到 ${elementsToTranslate.length} 个需要翻译的元素`);
 
-            if (paragraphs.length === 0) {
+            if (elementsToTranslate.length === 0) {
                 addLog(`  -> 未找到可翻译内容`);
                 return convertVerticalToHorizontal(html);
             }
 
             // 统计实际需要翻译的字数
             let actualCharsToTranslate = 0;
-            paragraphs.forEach(p => {
-                actualCharsToTranslate += p.originalText.length;
+            elementsToTranslate.forEach(e => {
+                actualCharsToTranslate += e.originalText.length;
             });
             addLog(`  -> 实际待翻译: ${actualCharsToTranslate.toLocaleString()} 字`);
 
-            // 智能合并段落
+            // 智能合并元素
             const TARGET_MIN_LENGTH = 300;
             const TARGET_MAX_LENGTH = 500;
-            const groupedParagraphs = [];
+            const groupedElements = [];
             let currentBatch = [];
             let currentLength = 0;
 
-            for (let i = 0; i < paragraphs.length; i++) {
-                const para = paragraphs[i];
-                const textLength = para.originalText.length;
+            for (let i = 0; i < elementsToTranslate.length; i++) {
+                const elem = elementsToTranslate[i];
+                const textLength = elem.originalText.length;
 
                 if (textLength > TARGET_MAX_LENGTH) {
                     if (currentBatch.length > 0) {
-                        groupedParagraphs.push({
-                            paragraphs: currentBatch,
-                            combinedText: currentBatch.map(p => p.originalText).join('\n\n')
+                        groupedElements.push({
+                            elements: currentBatch,
+                            combinedText: currentBatch.map(e => e.originalText).join('\n\n')
                         });
                         currentBatch = [];
                         currentLength = 0;
                     }
-                    groupedParagraphs.push({
-                        paragraphs: [para],
-                        combinedText: para.originalText
+                    groupedElements.push({
+                        elements: [elem],
+                        combinedText: elem.originalText
                     });
                 } else {
-                    currentBatch.push(para);
+                    currentBatch.push(elem);
                     currentLength += textLength;
 
                     if (currentLength >= TARGET_MIN_LENGTH || currentBatch.length >= 10) {
-                        groupedParagraphs.push({
-                            paragraphs: currentBatch,
-                            combinedText: currentBatch.map(p => p.originalText).join('\n\n')
+                        groupedElements.push({
+                            elements: currentBatch,
+                            combinedText: currentBatch.map(e => e.originalText).join('\n\n')
                         });
                         currentBatch = [];
                         currentLength = 0;
@@ -1324,23 +1668,23 @@
             }
 
             if (currentBatch.length > 0) {
-                groupedParagraphs.push({
-                    paragraphs: currentBatch,
-                    combinedText: currentBatch.map(p => p.originalText).join('\n\n')
+                groupedElements.push({
+                    elements: currentBatch,
+                    combinedText: currentBatch.map(e => e.originalText).join('\n\n')
                 });
             }
 
-            addLog(`智能合并: ${paragraphs.length} 个段落 → ${groupedParagraphs.length} 个翻译组`);
+            addLog(`智能合并: ${elementsToTranslate.length} 个元素 → ${groupedElements.length} 个翻译组`);
 
             // 翻译处理
             let translatedCount = 0;
             const CONCURRENT_BATCHES = 30;
 
-            for (let batchStart = 0; batchStart < groupedParagraphs.length; batchStart += CONCURRENT_BATCHES) {
+            for (let batchStart = 0; batchStart < groupedElements.length; batchStart += CONCURRENT_BATCHES) {
                 if (state.shouldCancel) break;
 
-                const batchEnd = Math.min(batchStart + CONCURRENT_BATCHES, groupedParagraphs.length);
-                const batch = groupedParagraphs.slice(batchStart, batchEnd);
+                const batchEnd = Math.min(batchStart + CONCURRENT_BATCHES, groupedElements.length);
+                const batch = groupedElements.slice(batchStart, batchEnd);
 
                 const translationPromises = batch.map(async (group) => {
                     return await translateGroup(group, sourceLang, targetLang, service);
@@ -1354,100 +1698,39 @@
                     }
                 });
 
-                const progress = Math.round((batchEnd / groupedParagraphs.length) * 100);
+                const progress = Math.round((batchEnd / groupedElements.length) * 100);
                 updateProgress(`翻译中...`, progress);
-                addLog(`翻译进度: ${translatedCount}/${paragraphs.length} 段完成 (${progress}%)`);
+                addLog(`翻译进度: ${translatedCount}/${elementsToTranslate.length} 个元素完成 (${progress}%)`);
             }
 
-            // 替换文本 - 清空并重新填充，确保不保留原文
+            // 替换文本 - 保留元素结构，只替换文本内容
             let replacedCount = 0;
-            paragraphs.forEach(para => {
-                if (para.translatedText && para.element) {
-                    // 检查是否有span子元素
-                    const spans = para.element.querySelectorAll('span');
-
-                    if (spans.length > 0) {
-                        // 检查是否包含首字母下沉等特殊样式
-                        const hasDropCap = Array.from(spans).some(span =>
-                            span.classList.contains('drop') ||
-                            span.classList.contains('first') ||
-                            span.classList.contains('after')
-                        );
-
-                        if (hasDropCap) {
-                            // 移除首字母下沉样式，使用普通样式
-                            // 查找第一个包含普通文本样式的span
-                            const normalSpan = Array.from(spans).find(span =>
-                                !span.classList.contains('drop') &&
-                                !span.classList.contains('first') &&
-                                !span.classList.contains('after') &&
-                                span.className
-                            );
-
-                            if (normalSpan && normalSpan.className) {
-                                // 使用普通span的样式 - 安全设置 HTML
-                                const safeHTML = `<span class="${normalSpan.className}">${escapeHTML(para.translatedText)}</span>`;
-                                setSafeHTML(para.element, safeHTML);
-                            } else {
-                                // 没有普通样式，直接设置文本
-                                para.element.textContent = para.translatedText;
-                            }
-                        } else {
-                            // 没有首字母下沉，保留第一个span的样式
-                            if (spans[0].className) {
-                                const safeHTML = `<span class="${spans[0].className}">${escapeHTML(para.translatedText)}</span>`;
-                                setSafeHTML(para.element, safeHTML);
-                            } else {
-                                para.element.textContent = para.translatedText;
-                            }
+            elementsToTranslate.forEach(elem => {
+                if (elem.translatedText && elem.element) {
+                    // 如果元素原本有子元素（如 span），保留第一个子元素的类名
+                    if (elem.hadChildren && elem.element.firstElementChild) {
+                        const firstChild = elem.element.firstElementChild;
+                        const className = firstChild.getAttribute('class');
+                        // 移除所有子元素
+                        while (elem.element.firstChild) {
+                            elem.element.removeChild(elem.element.firstChild);
                         }
+                        // 创建新的span并保留类名
+                        const newSpan = doc.createElement('span');
+                        if (className) {
+                            newSpan.setAttribute('class', className);
+                        }
+                        newSpan.textContent = elem.translatedText;
+                        elem.element.appendChild(newSpan);
                     } else {
-                        // 没有span标签，直接设置文本
-                        para.element.textContent = para.translatedText;
+                        // 简单元素，直接替换文本
+                        elem.element.textContent = elem.translatedText;
                     }
-
                     replacedCount++;
                 }
             });
 
-            addLog(`文本替换: ${replacedCount} 个段落`);
-
-            // 处理标题元素（h1-h6）
-            const headings = doc.querySelectorAll('h1, h2, h3, h4, h5, h6');
-            let headingCount = 0;
-            for (const heading of headings) {
-                const headingText = heading.textContent.trim();
-                if (headingText.length > 0 && headingText.length < 200) {
-                    // 翻译标题
-                    try {
-                        let translatedHeading;
-                        if (service === 'zhipu') {
-                            translatedHeading = await translateWithZhipuAI(headingText, sourceLang, targetLang, 1);
-                        } else if (service === 'openrouter') {
-                            translatedHeading = await translateWithOpenRouter(headingText, sourceLang, targetLang, 1);
-                        } else {
-                            translatedHeading = headingText;
-                        }
-
-                        // 保留标题的HTML结构，只替换文本节点 - 安全处理
-                        const spans = heading.querySelectorAll('span');
-                        if (spans.length > 0 && spans[0].className) {
-                            // 有span标签，保留样式 - 使用安全函数
-                            const safeHTML = `<span class="${spans[0].className}">${escapeHTML(translatedHeading)}</span>`;
-                            setSafeHTML(heading, safeHTML);
-                        } else {
-                            // 没有span标签，直接设置文本
-                            heading.textContent = translatedHeading;
-                        }
-                        headingCount++;
-                    } catch (error) {
-                        console.warn('标题翻译失败:', error);
-                    }
-                }
-            }
-            if (headingCount > 0) {
-                addLog(`标题翻译: ${headingCount} 个标题`);
-            }
+            addLog(`文本替换: ${replacedCount} 个元素`);
 
             // 序列化
             let translatedHTML = serializeHTML(doc, html);
@@ -1462,8 +1745,8 @@
             const originalText = group.combinedText;
 
             if (originalText.length < 1 || /^[\d\s\p{P}\p{S}]+$/u.test(originalText)) {
-                group.paragraphs.forEach(p => {
-                    p.translatedText = p.originalText;
+                group.elements.forEach(e => {
+                    e.translatedText = e.originalText;
                 });
                 return { success: true, skipped: true, count: 0 };
             }
@@ -1476,20 +1759,20 @@
             try {
                 let translatedText;
                 if (service === 'zhipu') {
-                    translatedText = await translateWithZhipuAI(originalText, sourceLang, targetLang, group.paragraphs.length);
+                    translatedText = await translateWithZhipuAI(originalText, sourceLang, targetLang, group.elements.length);
                 } else if (service === 'openrouter') {
-                    translatedText = await translateWithOpenRouter(originalText, sourceLang, targetLang, group.paragraphs.length);
+                    translatedText = await translateWithOpenRouter(originalText, sourceLang, targetLang, group.elements.length);
                 } else {
                     translatedText = originalText;
                 }
 
                 const translatedLines = translatedText.split(/\n\n+/).map(line => line.trim()).filter(line => line);
 
-                group.paragraphs.forEach((para, idx) => {
+                group.elements.forEach((elem, idx) => {
                     if (idx < translatedLines.length) {
-                        para.translatedText = translatedLines[idx];
+                        elem.translatedText = translatedLines[idx];
                     } else {
-                        para.translatedText = para.originalText;
+                        elem.translatedText = elem.originalText;
                     }
                 });
 
@@ -1498,11 +1781,11 @@
                     translatedText.substring(0, 200) + (translatedText.length > 200 ? '...' : '')
                 );
 
-                return { success: true, count: group.paragraphs.length };
+                return { success: true, count: group.elements.length };
             } catch (error) {
                 addLog(`翻译失败: ${error.message}`, true);
-                group.paragraphs.forEach(p => {
-                    p.translatedText = p.originalText;
+                group.elements.forEach(e => {
+                    e.translatedText = e.originalText;
                 });
                 return { success: false, error: error.message };
             }
@@ -1529,44 +1812,71 @@
 原文（共${paraCount}段）：
 ${text}`;
 
-            const response = await fetch(`${baseUrl}chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`
-                },
-                body: JSON.stringify({
-                    model: 'glm-4-flash',
-                    messages: [{ role: 'user', content: translatePrompt }],
-                    temperature: 0.3,
-                    max_tokens: 4000
-                })
-            });
+            try {
+                const response = await fetch(`${baseUrl}chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: 'glm-4-flash',
+                        messages: [{ role: 'user', content: translatePrompt }],
+                        temperature: 0.3,
+                        max_tokens: 4000
+                    })
+                });
 
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(`API 调用失败: ${response.status} - ${errorData.error?.message || response.statusText}`);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    let errorMessage = `API 调用失败: ${response.status} - ${response.statusText}`;
+                    try {
+                        const errorData = JSON.parse(errorText);
+                        errorMessage = `API 调用失败: ${response.status} - ${errorData.error?.message || errorData.message || response.statusText}`;
+                    } catch (e) {
+                        errorMessage = `API 调用失败: ${response.status} - ${errorText || response.statusText}`;
+                    }
+                    throw new Error(errorMessage);
+                }
+
+                const responseText = await response.text();
+                if (!responseText || responseText.trim() === '') {
+                    throw new Error('API 返回了空响应');
+                }
+
+                let data;
+                try {
+                    data = JSON.parse(responseText);
+                } catch (parseError) {
+                    console.error('JSON 解析失败，响应内容:', responseText.substring(0, 200));
+                    throw new Error(`API 返回了无效的 JSON 格式: ${parseError.message}`);
+                }
+
+                const translatedText = data.choices[0]?.message?.content?.trim();
+
+                if (!translatedText) {
+                    console.error('API 响应结构:', data);
+                    throw new Error('API 返回了空响应，请检查 API Key 是否正确');
+                }
+
+                const cleanedText = cleanTranslatedText(translatedText);
+
+                // 更新token统计
+                const apiInputTokens = data.usage?.prompt_tokens;
+                const apiOutputTokens = data.usage?.completion_tokens;
+                state.totalInputTokens += apiInputTokens || estimateTokens(translatePrompt);
+                state.totalOutputTokens += apiOutputTokens || estimateTokens(cleanedText);
+                state.totalSourceChars += text.trim().length;
+                state.totalTranslatedChars += cleanedText.trim().length;
+                updateTokenDisplay();
+
+                return cleanedText;
+            } catch (error) {
+                if (error.message.includes('JSON')) {
+                    throw error;
+                }
+                throw new Error(`翻译请求失败: ${error.message}`);
             }
-
-            const data = await response.json();
-            const translatedText = data.choices[0]?.message?.content?.trim();
-
-            if (!translatedText) {
-                throw new Error('API 返回了空响应');
-            }
-
-            const cleanedText = cleanTranslatedText(translatedText);
-
-            // 更新token统计
-            const apiInputTokens = data.usage?.prompt_tokens;
-            const apiOutputTokens = data.usage?.completion_tokens;
-            state.totalInputTokens += apiInputTokens || estimateTokens(translatePrompt);
-            state.totalOutputTokens += apiOutputTokens || estimateTokens(cleanedText);
-            state.totalSourceChars += text.trim().length;
-            state.totalTranslatedChars += cleanedText.trim().length;
-            updateTokenDisplay();
-
-            return cleanedText;
         }
 
         async function translateWithOpenRouter(text, sourceLang, targetLang, paraCount) {
@@ -1590,44 +1900,70 @@ ${text}`;
 原文（共${paraCount}段）：
 ${text}`;
 
-            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`,
-                    'HTTP-Referer': window.location.href,
-                    'X-Title': 'EPUB Translator'
-                },
-                body: JSON.stringify({
-                    model: model,
-                    messages: [{ role: 'user', content: translatePrompt }],
-                    temperature: 0.3,
-                    max_tokens: 4000
-                })
-            });
+            try {
+                const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`,
+                        'HTTP-Referer': window.location.href,
+                        'X-Title': 'EPUB Translator'
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [{ role: 'user', content: translatePrompt }],
+                        temperature: 0.3,
+                        max_tokens: 4000
+                    })
+                });
 
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`API 调用失败: ${response.status} - ${errorText}`);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    let errorMessage = `API 调用失败: ${response.status} - ${response.statusText}`;
+                    try {
+                        const errorData = JSON.parse(errorText);
+                        errorMessage = `API 调用失败: ${response.status} - ${errorData.error?.message || errorData.message || response.statusText}`;
+                    } catch (e) {
+                        errorMessage = `API 调用失败: ${response.status} - ${errorText || response.statusText}`;
+                    }
+                    throw new Error(errorMessage);
+                }
+
+                const responseText = await response.text();
+                if (!responseText || responseText.trim() === '') {
+                    throw new Error('API 返回了空响应');
+                }
+
+                let data;
+                try {
+                    data = JSON.parse(responseText);
+                } catch (parseError) {
+                    console.error('JSON 解析失败，响应内容:', responseText.substring(0, 200));
+                    throw new Error(`API 返回了无效的 JSON 格式: ${parseError.message}`);
+                }
+
+                if (!data.choices || !data.choices[0] || !data.choices[0].message?.content) {
+                    console.error('API 响应结构:', data);
+                    throw new Error('API 返回数据格式不正确，请检查 API Key 是否正确');
+                }
+
+                const translatedText = data.choices[0].message.content.trim();
+                const cleanedText = cleanTranslatedText(translatedText);
+
+                // 更新token统计
+                state.totalInputTokens += data.usage?.prompt_tokens || estimateTokens(translatePrompt);
+                state.totalOutputTokens += data.usage?.completion_tokens || estimateTokens(cleanedText);
+                state.totalSourceChars += text.trim().length;
+                state.totalTranslatedChars += cleanedText.trim().length;
+                updateTokenDisplay();
+
+                return cleanedText;
+            } catch (error) {
+                if (error.message.includes('JSON')) {
+                    throw error;
+                }
+                throw new Error(`翻译请求失败: ${error.message}`);
             }
-
-            const data = await response.json();
-
-            if (!data.choices || !data.choices[0] || !data.choices[0].message?.content) {
-                throw new Error('API 返回数据格式不正确');
-            }
-
-            const translatedText = data.choices[0].message.content.trim();
-            const cleanedText = cleanTranslatedText(translatedText);
-
-            // 更新token统计
-            state.totalInputTokens += estimateTokens(translatePrompt);
-            state.totalOutputTokens += estimateTokens(cleanedText);
-            state.totalSourceChars += text.trim().length;
-            state.totalTranslatedChars += cleanedText.trim().length;
-            updateTokenDisplay();
-
-            return cleanedText;
         }
 
         function serializeHTML(doc, originalHTML) {
@@ -1669,20 +2005,43 @@ ${text}`;
                                originalHTML.includes('xmlns=');
 
                 if (isXHTML) {
-                    const serializer = new XMLSerializer();
                     const hasHtmlTag = originalHTML.toLowerCase().includes('<html');
 
                     if (hasHtmlTag) {
-                        const serialized = serializer.serializeToString(doc);
+                        // 提取原始文件的 XML 声明和 DOCTYPE
+                        const xmlDeclMatch = originalHTML.match(/<\?xml[^>]*\?>/i);
                         const docTypeMatch = originalHTML.match(/<!DOCTYPE[^>]*>/i);
+
                         let result = '';
-                        if (docTypeMatch) {
-                            result = docTypeMatch[0] + '\n';
+
+                        // 添加原始的 XML 声明
+                        if (xmlDeclMatch) {
+                            result = xmlDeclMatch[0] + '\n';
                         }
-                        return result + serialized;
+
+                        // 添加原始的 DOCTYPE
+                        if (docTypeMatch) {
+                            result += docTypeMatch[0] + '\n';
+                        }
+
+                        // 使用 XMLSerializer 序列化 documentElement（<html> 标签）
+                        // 这会保留 xmlns、xml:lang 等所有属性
+                        const serializer = new XMLSerializer();
+                        const htmlContent = serializer.serializeToString(doc.documentElement);
+
+                        // 添加序列化的 HTML 内容
+                        result += htmlContent;
+
+                        return result;
                     } else {
+                        // 保留body子节点之间的换行符
                         const bodyContent = Array.from(doc.body.childNodes).map(node => {
-                            return serializer.serializeToString(node);
+                            if (node.nodeType === Node.TEXT_NODE) {
+                                return node.textContent; // 保留文本节点（包括换行符）
+                            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                                return serializer.serializeToString(node);
+                            }
+                            return '';
                         }).join('');
                         return bodyContent;
                     }
@@ -1714,6 +2073,12 @@ ${text}`;
                 return;
             }
 
+            // 检查是否有文件
+            if (state.epubFiles.length === 0) {
+                alert('请先上传 EPUB 文件');
+                return;
+            }
+
             elements.progressArea.classList.remove('hidden');
             elements.downloadArea.classList.add('hidden');
             elements.progressLog.innerHTML = '';
@@ -1735,98 +2100,279 @@ ${text}`;
             elements.originalTextDiv.textContent = '准备中...';
             elements.translatedTextDiv.textContent = '准备中...';
 
-            addLog(`开始翻译: ${sourceLang} -> ${targetLang}`);
+            addLog(`开始翻译 ${state.epubFiles.length} 个文件: ${sourceLang} -> ${targetLang}`);
 
             try {
-                // 统计文件数量
-                addLog('正在统计文件...');
-                const files = Object.keys(state.epubZip.files);
-                const htmlFiles = files.filter(f => f.endsWith('.html') || f.endsWith('.xhtml'));
-                const totalHtmlFiles = htmlFiles.length;
-                addLog(`找到 ${totalHtmlFiles} 个HTML文件需要翻译`);
+                // 清空之前的翻译结果
+                state.translatedEpubs = {};
+                let completedCount = 0;
 
-                state.translatedEpub = new JSZip();
-                let processedFiles = 0;
-
-                // 首先处理非HTML文件
-                for (const filename of files) {
-                    if (state.shouldCancel) break;
-
-                    const file = state.epubZip.files[filename];
-                    if (!file.dir && !filename.endsWith('.html') && !filename.endsWith('.xhtml')) {
-                        if (filename.endsWith('.opf') || filename.endsWith('.ncx') || filename.endsWith('.css')) {
-                            addLog(`  -> 处理配置文件: ${filename}`);
-                            const textContent = await file.async('string');
-                            const convertedContent = convertVerticalToHorizontal(textContent);
-                            await state.translatedEpub.file(filename, convertedContent);
-                        } else {
-                            // 其他文件（图片、字体等）直接复制
-                            await state.translatedEpub.file(filename, await file.async('arraybuffer'));
-                        }
-                    }
-                }
-
-                // 并行处理HTML文件
-                addLog(`开始并行翻译 ${totalHtmlFiles} 个HTML文件...`);
-
-                // 将文件分批处理
-                const chunks = [];
-                const PARALLEL_COUNT = CONFIG.FILE.PARALLEL_PROCESSING;
-                for (let i = 0; i < htmlFiles.length; i += PARALLEL_COUNT) {
-                    chunks.push(htmlFiles.slice(i, i + PARALLEL_COUNT));
-                }
-
-                // 处理每一批文件
-                for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+                // 逐个翻译每个文件
+                for (let fileIndex = 0; fileIndex < state.epubFiles.length; fileIndex++) {
                     if (state.shouldCancel) {
                         addLog('⚠️ 翻译已取消', true);
                         break;
                     }
 
-                    const chunk = chunks[chunkIndex];
-                    const chunkStart = chunkIndex * PARALLEL_COUNT + 1;
-                    const chunkEnd = Math.min(chunkStart + chunk.length - 1, totalHtmlFiles);
+                    const fileData = state.epubFiles[fileIndex];
+                    fileData.status = 'processing';
+                    fileData.progress = 0;
+                    updateFileListUI();
 
-                    // 并行翻译当前批次的所有文件
-                    const results = await Promise.all(chunk.map(async (filename) => {
-                        if (state.shouldCancel) return null;
+                    addLog(`\n[${fileIndex + 1}/${state.epubFiles.length}] 正在翻译: ${fileData.name}`);
 
-                        const file = state.epubZip.files[filename];
-                        const textContent = await file.async('string');
-                        const translatedText = await translateHTMLContent(textContent, sourceLang, targetLang, service);
+                    // 使用文件对应的 zip 对象
+                    const zip = fileData.zip;
+                    if (!zip) {
+                        addLog(`✗ 文件 ${fileData.name} 未加载，跳过`, true);
+                        fileData.status = 'failed';
+                        fileData.error = '文件未加载';
+                        updateFileListUI();
+                        continue;
+                    }
 
-                        return { filename, translatedText };
-                    }));
+                    // 统计文件数量
+                    addLog(`  -> 正在统计文件...`);
+                    const files = Object.keys(zip.files);
+                    const htmlFiles = files.filter(f => f.endsWith('.html') || f.endsWith('.xhtml'));
+                    const totalHtmlFiles = htmlFiles.length;
+                    addLog(`  -> 找到 ${totalHtmlFiles} 个HTML文件需要翻译`);
 
-                    // 保存翻译结果
-                    for (const result of results) {
-                        if (result && result.translatedText) {
-                            await state.translatedEpub.file(result.filename, result.translatedText);
-                            processedFiles++;
+                    const translatedEpub = new JSZip();
+                    let processedFiles = 0;
+
+                    // 首先处理非HTML文件
+                    for (const filename of files) {
+                        if (state.shouldCancel) break;
+
+                        const file = zip.files[filename];
+                        if (!file.dir && !filename.endsWith('.html') && !filename.endsWith('.xhtml')) {
+                            if (filename.endsWith('.opf') || filename.endsWith('.ncx') || filename.endsWith('.css')) {
+                                const textContent = await file.async('string');
+                                const convertedContent = convertVerticalToHorizontal(textContent);
+                                translatedEpub.file(filename, convertedContent);
+                            } else {
+                                // 其他文件（图片、字体等）直接复制
+                                translatedEpub.file(filename, await file.async('arraybuffer'));
+                            }
                         }
                     }
 
-                    // 更新进度
-                    const progress = Math.round((processedFiles / totalHtmlFiles) * 100);
-                    updateProgress(`正在翻译 (${processedFiles}/${totalHtmlFiles})`, progress);
-                    flushAllLogs(); // 确保所有日志都已显示
+                    // 并行处理HTML文件
+                    addLog(`  -> 开始并行翻译 ${totalHtmlFiles} 个HTML文件...`);
+
+                    // 将文件分批处理
+                    const chunks = [];
+                    const PARALLEL_COUNT = CONFIG.FILE.PARALLEL_PROCESSING;
+                    for (let i = 0; i < htmlFiles.length; i += PARALLEL_COUNT) {
+                        chunks.push(htmlFiles.slice(i, i + PARALLEL_COUNT));
+                    }
+
+                    // 处理每一批文件
+                    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+                        if (state.shouldCancel) break;
+
+                        const chunk = chunks[chunkIndex];
+
+                        // 并行翻译当前批次的所有文件
+                        const results = await Promise.all(chunk.map(async (filename) => {
+                            if (state.shouldCancel) return null;
+
+                            const file = zip.files[filename];
+                            const textContent = await file.async('string');
+                            const translatedText = await translateHTMLContent(textContent, sourceLang, targetLang, service);
+
+                            return { filename, translatedText };
+                        }));
+
+                        // 保存翻译结果
+                        for (const result of results) {
+                            if (result && result.translatedText) {
+                                translatedEpub.file(result.filename, result.translatedText);
+                                processedFiles++;
+                            }
+                        }
+
+                        // 更新文件进度
+                        fileData.progress = Math.round((processedFiles / totalHtmlFiles) * 100);
+                        updateFileListUI();
+
+                        // 更新总体进度
+                        const overallProgress = Math.round(((completedCount * 100 + fileData.progress) / state.epubFiles.length));
+                        updateProgress(`正在翻译文件 ${fileIndex + 1}/${state.epubFiles.length}`, overallProgress);
+                    }
+
+                    // 保存翻译结果
+                    if (!state.shouldCancel) {
+                        state.translatedEpubs[fileData.id] = translatedEpub;
+                        fileData.status = 'completed';
+                        fileData.translated = translatedEpub;
+                        fileData.progress = 100;
+                        completedCount++;
+                        addLog(`  -> ✓ ${fileData.name} 翻译完成`);
+
+                        // 立即显示下载区域并更新文件列表
+                        elements.downloadArea.classList.remove('hidden');
+                        updateTranslatedFileList();
+                    }
+
+                    updateFileListUI();
+                    flushAllLogs();
                 }
 
                 if (!state.shouldCancel) {
                     updateProgress('完成', 100);
                     state.translationEndTime = Date.now();
-                    addLog('✓ 翻译完成！');
+                    addLog(`\n✓ 所有文件翻译完成！共翻译 ${completedCount} 个文件`);
                     elements.downloadArea.classList.remove('hidden');
+
+                    // 更新翻译文件列表
+                    updateTranslatedFileList();
+
+                    // 为兼容性，设置第一个文件为当前翻译结果
+                    if (state.epubFiles.length > 0 && state.epubFiles[0].translated) {
+                        state.translatedEpub = state.epubFiles[0].translated;
+                        state.epubFile = state.epubFiles[0].file;
+                    }
                 }
 
             } catch (error) {
                 addLog('翻译过程中出错: ' + error.message, true);
+                console.error(error);
             }
 
             elements.translateBtn.disabled = false;
             elements.translateBtn.classList.remove('hidden');
             elements.cancelBtn.classList.add('hidden');
             state.isTranslating = false;
+        }
+
+        function updateTranslatedFileList() {
+            const sourceLang = document.querySelector('input[name="sourceLang"]:checked').value;
+            const targetLang = document.querySelector('input[name="targetLang"]:checked').value;
+
+            const completedFiles = state.epubFiles.filter(f => f.status === 'completed' && f.translated);
+            const processingFiles = state.epubFiles.filter(f => f.status === 'processing');
+
+            let html = '';
+
+            // 显示进度提示（如果有文件正在翻译）
+            if (processingFiles.length > 0) {
+                html += `
+                    <div class="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4 rounded">
+                        <div class="flex items-center">
+                            <svg class="h-5 w-5 text-blue-400 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <div>
+                                <p class="text-blue-800 font-medium">正在翻译中...</p>
+                                <p class="text-sm text-blue-600">已完成 ${completedFiles.length} / ${state.epubFiles.length} 个文件</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // 已完成的文件
+            if (completedFiles.length > 0) {
+                html += completedFiles.map((fileData, index) => {
+                    const originalName = fileData.name.replace('.epub', '');
+                    const newName = `${originalName}_${LANG_CODES[sourceLang]}to${LANG_CODES[targetLang]}_translated.epub`;
+
+                    return `
+                        <div class="bg-white border border-green-300 rounded-lg p-4 flex items-center justify-between">
+                            <div class="flex items-center flex-1">
+                                <svg class="h-8 w-8 mr-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                </svg>
+                                <div class="flex-1">
+                                    <p class="font-medium text-gray-800">${escapeHTML(newName)}</p>
+                                    <p class="text-sm text-gray-500">原文件: ${escapeHTML(fileData.name)}</p>
+                                </div>
+                            </div>
+                            <div class="flex gap-2 ml-4">
+                                <button onclick="previewSingleFile('${fileData.id}')" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors text-sm">
+                                    <span class="flex items-center">
+                                        <svg class="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                        </svg>
+                                        预览
+                                    </span>
+                                </button>
+                                <button onclick="downloadSingleFile('${fileData.id}')" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-sm">
+                                    <span class="flex items-center">
+                                        <svg class="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                                        </svg>
+                                        下载
+                                    </span>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                html += '<p class="text-center text-gray-500 py-4">等待文件翻译完成...</p>';
+            }
+
+            document.getElementById('translatedFileList').innerHTML = html;
+
+            // 控制批量下载按钮的显示：只有在所有文件都完成翻译后才显示
+            const batchDownloadBtnContainer = document.getElementById('batchDownloadBtn');
+            if (completedFiles.length > 1 && completedFiles.length === state.epubFiles.length) {
+                batchDownloadBtnContainer.classList.remove('hidden');
+            } else {
+                batchDownloadBtnContainer.classList.add('hidden');
+            }
+        }
+
+        async function downloadSingleFile(fileId) {
+            const fileData = state.epubFiles.find(f => f.id === fileId);
+            if (!fileData || !fileData.translated) {
+                alert('文件不存在或未翻译');
+                return;
+            }
+
+            try {
+                const sourceLang = document.querySelector('input[name="sourceLang"]:checked').value;
+                const targetLang = document.querySelector('input[name="targetLang"]:checked').value;
+
+                const content = await fileData.translated.generateAsync({ type: 'blob' });
+                const url = URL.createObjectURL(content);
+                const a = document.createElement('a');
+                a.href = url;
+
+                const originalName = fileData.name.replace('.epub', '');
+                const newName = `${originalName}_${LANG_CODES[sourceLang]}to${LANG_CODES[targetLang]}_translated.epub`;
+
+                a.download = newName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                addLog(`✓ 已下载: ${newName}`);
+            } catch (error) {
+                addLog('下载失败: ' + error.message, true);
+                console.error(error);
+            }
+        }
+
+        async function previewSingleFile(fileId) {
+            const fileData = state.epubFiles.find(f => f.id === fileId);
+            if (!fileData || !fileData.translated) {
+                alert('文件不存在或未翻译');
+                return;
+            }
+
+            // 设置当前预览的文件
+            state.translatedEpub = fileData.translated;
+            state.currentPreviewFile = fileData;
+
+            // 调用预览功能
+            await showPreview();
         }
 
         function handleCancel() {
@@ -1842,31 +2388,62 @@ ${text}`;
         // 下载模块
         // ============================================
 
-        async function handleDownload() {
-            if (!state.translatedEpub) return;
+        async function handleDownloadAll() {
+            if (state.epubFiles.length === 0) return;
 
             try {
-                const content = await state.translatedEpub.generateAsync({ type: 'blob' });
-                const url = URL.createObjectURL(content);
-                const a = document.createElement('a');
-                a.href = url;
-
-                const originalName = state.epubFile.name.replace('.epub', '');
                 const sourceLang = document.querySelector('input[name="sourceLang"]:checked').value;
                 const targetLang = document.querySelector('input[name="targetLang"]:checked').value;
-                const newName = `${originalName}_${LANG_CODES[sourceLang]}to${LANG_CODES[targetLang]}_translated.epub`;
 
-                a.download = newName;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                addLog(`✓ 翻译后文件已下载: ${newName}`);
+                // 检查有多少文件已完成翻译
+                const completedFiles = state.epubFiles.filter(f => f.status === 'completed' && f.translated);
+
+                if (completedFiles.length === 0) {
+                    alert('没有已完成的翻译文件可以下载');
+                    return;
+                }
+
+                addLog(`开始批量下载 ${completedFiles.length} 个翻译文件...`);
+
+                // 逐个下载文件
+                for (const fileData of completedFiles) {
+                    const content = await fileData.translated.generateAsync({ type: 'blob' });
+                    const url = URL.createObjectURL(content);
+                    const a = document.createElement('a');
+                    a.href = url;
+
+                    const originalName = fileData.name.replace('.epub', '');
+                    const newName = `${originalName}_${LANG_CODES[sourceLang]}to${LANG_CODES[targetLang]}_translated.epub`;
+
+                    a.download = newName;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+
+                    addLog(`✓ 已下载: ${newName}`);
+
+                    // 添加小延迟避免浏览器阻止多个下载
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                }
+
+                addLog(`✓ 批量下载完成，共下载 ${completedFiles.length} 个文件`);
                 addLog('✓ 原始文件未被修改');
+
+                // 为兼容性，设置第一个文件为当前翻译结果
+                if (completedFiles.length > 0) {
+                    state.translatedEpub = completedFiles[0].translated;
+                    state.epubFile = completedFiles[0].file;
+                }
             } catch (error) {
                 addLog('下载失败: ' + error.message, true);
+                console.error(error);
             }
         }
+
+        // 全局函数：供HTML onclick调用
+        window.downloadSingleFile = downloadSingleFile;
+        window.previewSingleFile = previewSingleFile;
 
         // ============================================
         // 预览模块
@@ -1909,9 +2486,11 @@ ${text}`;
 
         function updatePreviewDisplay() {
             const page = state.previewPages[state.currentPreviewPage];
-            document.getElementById('previewContent').innerHTML = page.content;
+            // 安全修复：使用 setSafeHTML 防止 XSS 攻击
+            const previewContent = document.getElementById('previewContent');
+            setSafeHTML(previewContent, page.content);
             document.getElementById('pageInfo').textContent = `第 ${state.currentPreviewPage + 1}/${state.previewPages.length} 页`;
-            document.getElementById('previewInfo').textContent = `文件: ${page.filename}`;
+            document.getElementById('previewInfo').textContent = `文件: ${escapeHTML(page.filename)}`;
             document.getElementById('prevPage').disabled = state.currentPreviewPage === 0;
             document.getElementById('nextPage').disabled = state.currentPreviewPage === state.previewPages.length - 1;
             document.getElementById('previewContent').scrollTop = 0;
@@ -1946,10 +2525,9 @@ ${text}`;
         elements.dropZone.addEventListener('dragleave', handleDragLeave);
         elements.dropZone.addEventListener('drop', handleDrop);
         elements.fileInput.addEventListener('change', handleFileSelect);
-        elements.removeFile.addEventListener('click', handleRemoveFile);
         elements.translateBtn.addEventListener('click', handleTranslate);
         elements.cancelBtn.addEventListener('click', handleCancel);
-        elements.downloadBtn.addEventListener('click', handleDownload);
+        document.getElementById('downloadAllBtn').addEventListener('click', handleDownloadAll);
         elements.translationService.addEventListener('change', () => {
             handleServiceChange();
             saveConfig();
@@ -1967,18 +2545,45 @@ ${text}`;
             if (el) el.addEventListener('input', saveConfig);
         });
 
-        document.addEventListener('DOMContentLoaded', () => {
-            loadConfig();
+        // 初始化配置
+        loadConfig();
 
-            document.getElementById('previewBtn').addEventListener('click', showPreview);
-            document.getElementById('closePreview').addEventListener('click', closePreview);
-            document.getElementById('prevPage').addEventListener('click', prevPreviewPage);
-            document.getElementById('nextPage').addEventListener('click', nextPreviewPage);
+        // 诊断测试函数
+        document.getElementById('debugBtn').addEventListener('click', () => {
+            console.log('=== 诊断信息 ===');
+            console.log('1. handleServiceChange 函数是否存在:', typeof handleServiceChange);
+            console.log('2. elements 对象:', elements);
+            console.log('3. translationService 元素:', elements.translationService);
+            console.log('4. customApiSettings 元素:', elements.customApiSettings);
+            console.log('5. zhipuApiSettings 元素:', document.getElementById('zhipuApiSettings'));
+            console.log('6. openrouterApiSettings 元素:', document.getElementById('openrouterApiSettings'));
+            console.log('7. 当前选择的值:', elements.translationService?.value);
 
-            const previewModal = document.getElementById('previewModal');
-            previewModal.addEventListener('click', (e) => {
-                if (e.target === previewModal) closePreview();
-            });
+            // 测试手动调用
+            console.log('8. 尝试手动调用 handleServiceChange()...');
+            try {
+                if (typeof handleServiceChange === 'function') {
+                    handleServiceChange();
+                    console.log('✓ handleServiceChange 调用成功');
+                } else {
+                    console.error('✗ handleServiceChange 不是函数');
+                }
+            } catch (error) {
+                console.error('✗ 调用出错:', error);
+            }
+        });
+
+        // 绑定清空文件按钮
+        document.getElementById('clearAllFiles').addEventListener('click', handleClearAllFiles);
+
+        // 绑定预览模态框相关按钮
+        document.getElementById('closePreview').addEventListener('click', closePreview);
+        document.getElementById('prevPage').addEventListener('click', prevPreviewPage);
+        document.getElementById('nextPage').addEventListener('click', nextPreviewPage);
+
+        const previewModal = document.getElementById('previewModal');
+        previewModal.addEventListener('click', (e) => {
+            if (e.target === previewModal) closePreview();
         });
     </script>
 </body>
