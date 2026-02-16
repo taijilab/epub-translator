@@ -1,0 +1,24 @@
+{
+  "name": "epubapp",
+  "version": "1.0.0",
+  "description": "一个功能强大的EPUB文件翻译工具，支持批量翻译、语言检测、格式保持等功能。",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taijilab/epub-translator.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/taijilab/epub-translator/issues"
+  },
+  "homepage": "https://github.com/taijilab/epub-translator#readme",
+  "devDependencies": {
+    "tailwindcss": "^4.1.18"
+  }
+}

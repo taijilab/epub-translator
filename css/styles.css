@@ -1,0 +1,9 @@
+/* EPUB 翻译工具 - 自定义样式 */
+.drop-zone.drag-over {
+    border-color: #3b82f6;
+    background-color: #eff6ff;
+}
+
+.progress-bar {
+    transition: width 0.3s ease;
+}
