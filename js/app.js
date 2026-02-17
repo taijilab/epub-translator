@@ -1361,6 +1361,37 @@ if (convertCheckbox && !convertCheckbox.checked) {
 convertCheckbox.checked = true;
 addLog(`✓ 检测到竖排模式（${verticalFeatureCount} 处竖排特征），已自动启用竖排转横排`);
 }
+
+// 如果检测到中文竖排，提示用户是否只做格式转换
+const sourceLang = document.querySelector('input[name="sourceLang"]:checked').value;
+const targetLang = document.querySelector('input[name="targetLang"]:checked').value;
+
+if (sourceLang === 'zh' && targetLang !== 'zh') {
+	// 中文竖排EPUB，询问用户是否只需要格式转换
+	const userChoice = confirm(
+`📖 检测到中文竖排EPUB
+
+已检测到 ${verticalFeatureCount} 处竖排特征。
+
+您可以选择：
+1. 只转换格式（竖排→横排），不翻译内容 - 推荐
+2. 翻译成其他语言
+
+点击"确定"：只转换格式（竖排→横排）
+点击"取消"：继续翻译流程`
+	);
+
+	if (userChoice) {
+		// 用户选择只转换格式
+		const targetLangCheckbox = document.querySelector('input[name="targetLang"][value="zh"]');
+		if (targetLangCheckbox) {
+			targetLangCheckbox.checked = true;
+			addLog('✓ 已切换到格式转换模式（中文→中文，仅转换竖排为横排）');
+		}
+	} else {
+		addLog('ℹ️ 继续翻译流程');
+	}
+}
 } else {
 addLog(`未检测到竖排模式`);
 }
