@@ -1066,6 +1066,11 @@ processedFiles++;
 updateProgress('完成', 100);
 addLog('✓ 翻译完成！');
 
+// 更新文件列表状态（单文件模式）
+if (fileListData.length > 0) {
+	updateFileStatus(0, 'completed');
+}
+
 // Show download button - 单文件模式
 const singleFileDiv = document.getElementById('singleFileDownload');
 const batchFileDiv = document.getElementById('batchFileDownload');
@@ -1256,8 +1261,9 @@ await detectAndEnableVerticalConversion();
 } catch (error) {
 console.error('分析文件内容时出错:', error);
 }
+}
 
-// 检测竖排模式并自动启用转换
+// 检测竖排模式并自动启用转换（独立函数）
 async function detectAndEnableVerticalConversion() {
 try {
 let hasVerticalMode = false;
@@ -1291,6 +1297,8 @@ break;
 }
 }
 }
+}
+
 
 // 2. 检查OPF文件中的竖排方向属性
 for (const filename of files) {
@@ -1318,6 +1326,8 @@ break;
 }
 }
 }
+}
+
 
 // 3. 检查HTML文件中是否有内联竖排样式
 for (const filename of files) {
@@ -1341,6 +1351,8 @@ break;
 }
 }
 }
+}
+
 
 // 如果检测到竖排模式，自动勾选转换选项
 if (hasVerticalMode) {
@@ -1357,6 +1369,7 @@ addLog(`未检测到竖排模式`);
 console.error('检测竖排模式时出错:', error);
 }
 }
+
 
 function formatFileSize(bytes) {
 if (bytes === 0) return '0 Bytes';
@@ -2283,6 +2296,11 @@ processedFiles++;
 
 updateProgress('完成', 100);
 addLog('✓ 翻译完成！');
+
+// 更新文件列表状态（单文件模式）
+if (fileListData.length > 0) {
+	updateFileStatus(0, 'completed');
+}
 
 // Show download button
 downloadArea.classList.remove('hidden');
@@ -4504,6 +4522,11 @@ processedFiles++;
 
 updateProgress('完成', 100);
 addLog('✓ 处理完成！');
+
+// 更新文件列表状态
+if (fileListData.length > 0) {
+	updateFileStatus(0, 'completed');
+}
 
 // Show download button
 downloadArea.classList.remove('hidden');
