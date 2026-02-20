@@ -2347,14 +2347,6 @@ node.textContent = `[${LANG_NAMES[sourceLang]}→${LANG_NAMES[targetLang]}] ` + 
 return `${docType}\n${doc.documentElement.outerHTML}`;
 }
 
-async function translateWithZhipuAI(text, sourceLang, targetLang) {
-const apiKey = document.getElementById('zhipuApiKey').value;
-const baseUrl = document.getElementById('zhipuBaseUrl').value || 'https://open.bigmodel.cn/api/paas/v4/';
-
-if (!apiKey) {
-throw new Error('请输入智谱AI API Key');
-}
-
 // 清理AI翻译结果中的提示词残留
 function cleanTranslatedText(rawText) {
 let cleaned = rawText;
@@ -2424,6 +2416,14 @@ return rawText.trim();
 }
 
 return cleaned.trim();
+}
+
+async function translateWithZhipuAI(text, sourceLang, targetLang) {
+const apiKey = document.getElementById('zhipuApiKey').value;
+const baseUrl = document.getElementById('zhipuBaseUrl').value || 'https://open.bigmodel.cn/api/paas/v4/';
+
+if (!apiKey) {
+throw new Error('请输入智谱AI API Key');
 }
 
 // 使用DOMParser解析HTML
