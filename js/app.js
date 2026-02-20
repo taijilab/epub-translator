@@ -2567,7 +2567,72 @@ processedElements.add(element);
 const rawText = element.textContent;
 const trimText = rawText.trim();
 
-if (trimText.length >= 1) {
+// 检查元素是否包含<br>标签（说明是多段落用<br>分隔的结构）
+const hasBrTags = element.innerHTML.includes('<br');
+
+if (hasBrTags && trimText.length >= 1) {
+// 对于用<br>分隔的内容，按<br>分割成多个段落
+// 先克隆元素，然后遍历其子节点，按<br>分割
+const subParagraphs = [];
+let currentText = '';
+
+// 遍历元素的所有子节点
+Array.from(element.childNodes).forEach(childNode => {
+if (childNode.nodeType === Node.TEXT_NODE) {
+const text = childNode.textContent;
+// 检查是否是全角空格开头的日文段落
+if (text.startsWith('　') || text.trim().length > 0) {
+currentText += text;
+}
+} else if (childNode.nodeType === Node.ELEMENT_NODE) {
+const tagName = childNode.tagName.toLowerCase();
+if (tagName === 'br') {
+// <br>标签表示段落结束
+if (currentText.trim().length > 0) {
+subParagraphs.push(currentText.trim());
+currentText = '';
+}
+} else if (tagName === 'a') {
+// 链接标签，提取文本
+const linkText = childNode.textContent;
+if (linkText.trim().length > 0) {
+if (currentText.length > 0 && !currentText.endsWith('\n')) {
+currentText += ' ';
+}
+currentText += linkText;
+}
+}
+// 其他标签如<span>等，提取文本
+else {
+const text = childNode.textContent;
+if (text && text.trim().length > 0) {
+currentText += text;
+}
+}
+}
+});
+
+// 添加最后一段
+if (currentText.trim().length > 0) {
+subParagraphs.push(currentText.trim());
+}
+
+// 将分割后的段落添加到段落列表
+subParagraphs.forEach((paraText) => {
+if (paraText.length >= 1) {
+paragraphs.push({
+element: element,
+originalText: paraText,
+rawText: paraText,
+index: paragraphs.length,
+skipReason: null
+});
+}
+});
+
+addLog(`  -> 检测到<br>分隔结构，分割为 ${subParagraphs.length} 个段落`);
+} else if (trimText.length >= 1) {
+// 普通情况，整个元素作为一个段落
 paragraphs.push({
 element: element,
 originalText: trimText,
@@ -2751,12 +2816,22 @@ return { success: true, skipped: true };
 let retries = 0;
 while (retries < maxRetries) {
 try {
-// 检查缓存
-const cachedResult = getFromCache(originalText, sourceLang, targetLang);
+// 检查缓存 - 使用无标记的原文作为键
+const cacheKey = group.paragraphs.map(p => p.originalText).join('\n\n');
+const cachedResult = getFromCache(cacheKey, sourceLang, targetLang);
 if (cachedResult) {
 // 使用缓存的翻译结果
 addLog('  -> 使用缓存的翻译结果');
-const translatedLines = cachedResult.split(/\n\n+/).map(line => line.trim()).filter(line => line);
+// 尝试从缓存中提取标记
+const markedMatches = cachedResult.match(/\[P\d+\][^\[]*/g);
+let translatedLines;
+if (markedMatches && markedMatches.length === group.paragraphs.length) {
+translatedLines = markedMatches.map(m => m.replace(/^\[P\d+\]\s*/, ''));
+addLog(`  -> 缓存使用段落标记提取: ${translatedLines.length}个段落`);
+} else {
+translatedLines = cachedResult.split(/\n\n+/).map(line => line.trim()).filter(line => line);
+addLog(`  -> 缓存使用双换行符分割: ${translatedLines.length}个段落`);
+}
 
 group.paragraphs.forEach((para, idx) => {
 if (idx < translatedLines.length) {
@@ -2778,25 +2853,24 @@ originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
 
 // 构建翻译提示词 - 要求保持段落结构
 const paraCount = group.paragraphs.length;
-const translatePrompt = `请将以下${langNames[sourceLang]}文本翻译成${langNames[targetLang]}。
 
-【重要】必须严格按照以下格式返回翻译结果：
-1. 翻译以下${paraCount}个段落
-2. 每个段落翻译完成后，必须空一行（输入两个回车）
-3. 必须返回恰好${paraCount}个翻译段落，多一个或少一个都不行
-4. 只返回翻译后的文本，不要添加任何解释、前言、后记或说明
-5. 翻译所有内容，包括任何英文单词、专有名词等
-6. 绝对禁止添加"Excerpt From"、"版权声明"、"翻译说明"等任何元数据
+// 为每个段落添加序号标记，确保AI按正确顺序翻译
+const numberedText = group.paragraphs.map((p, i) =>
+`[P${i+1}] ${p.originalText}`
+).join('\n\n');
 
-原文（第1段到第${paraCount}段，按顺序）：
-${originalText}
+const translatePrompt = `你是${langNames[sourceLang]}到${langNames[targetLang]}的翻译专家。请翻译以下文本。
 
-【再次强调】：
-- 原文有${paraCount}段
-- 你的译文必须有${paraCount}段
-- 段落之间空一行分隔
-- 只返回译文，不要其他内容
-- 不要添加任何元数据、版权信息或翻译说明`;
+【重要要求】
+1. 原文共${paraCount}个段落，每个段落用[P1]、[P2]...标记
+2. 译文必须保持相同的段落标记和顺序
+3. 每个段落的标记（如[P1]）必须保留在译文开头
+4. 只返回译文，不要有其他内容
+
+原文：
+${numberedText}
+
+译文：`;
 
 // 添加超时控制
 const controller = new AbortController();
@@ -2845,66 +2919,72 @@ throw new Error('API 返回了空响应');
 // 清理AI回复中的提示词残留
 const cleanedText = cleanTranslatedText(translatedText);
 
-// 添加到缓存
-addToCache(originalText, sourceLang, targetLang, cleanedText);
+// 添加到缓存 - 使用无标记的原文作为键
+addToCache(cacheKey, sourceLang, targetLang, cleanedText);
 
-// 按段落边界分割翻译结果 - 改进的分割逻辑
+// 按段落边界分割翻译结果 - 使用标记匹配
 let translatedLines;
+const expectedCount = group.paragraphs.length;
+
+// 首先尝试用段落标记[P1]、[P2]等分割
+const markedMatches = cleanedText.match(/\[P\d+\][^\[]*/g);
+if (markedMatches && markedMatches.length === expectedCount) {
+// 使用标记提取译文，移除标记
+translatedLines = markedMatches.map(m => m.replace(/^\[P\d+\]\s*/, ''));
+addLog(`  -> 使用段落标记提取: ${translatedLines.length}个段落`);
+} else {
+// 回退到原来的分割方式
 const doubleNewlineSplit = cleanedText.split(/\n\n+/).map(line => line.trim()).filter(line => line);
 
-// 如果双换行符分割的结果数量不对，尝试单换行符
-if (doubleNewlineSplit.length === group.paragraphs.length) {
-translatedLines = doubleNewlineSplit;
-} else {
-const singleNewlineSplit = cleanedText.split(/\n/).map(line => line.trim()).filter(line => line.length > 0);
-// 使用最接近期望数量的分割结果
-if (Math.abs(singleNewlineSplit.length - group.paragraphs.length) < Math.abs(doubleNewlineSplit.length - group.paragraphs.length)) {
-translatedLines = singleNewlineSplit;
-addLog(`  -> 使用单换行符分割: ${singleNewlineSplit.length}个段落`);
-} else {
-translatedLines = doubleNewlineSplit;
-addLog(`  -> 使用双换行符分割: ${doubleNewlineSplit.length}个段落`);
+// 尝试不同的分割方式，找到最接近期望数量的结果
+const splitOptions = [
+{ lines: doubleNewlineSplit, name: '双换行符' },
+{ lines: cleanedText.split(/\n/).map(line => line.trim()).filter(line => line.length > 0), name: '单换行符' },
+{ lines: cleanedText.split(/[。！？]/).map(line => line.trim()).filter(line => line.length > 2), name: '句号分割' }
+];
+
+// 找到最接近期望数量的分割方式
+let bestMatch = splitOptions[0];
+let minDiff = Math.abs(splitOptions[0].lines.length - expectedCount);
+
+for (const option of splitOptions) {
+const diff = Math.abs(option.lines.length - expectedCount);
+if (diff < minDiff) {
+minDiff = diff;
+bestMatch = option;
 }
 }
 
-// 调试：记录翻译结果分配情况
-addLog(`  -> 翻译结果分配: ${group.paragraphs.length}个原始段落 → ${translatedLines.length}个翻译段落`);
+translatedLines = bestMatch.lines;
+addLog(`  -> 翻译结果: 期望${expectedCount}段，AI返回${translatedLines.length}段（使用${bestMatch.name}分割）`);
+}
 
 // 智能分配翻译结果到各个段落
-if (translatedLines.length === group.paragraphs.length) {
+if (translatedLines.length === expectedCount) {
 // 完美匹配：直接分配
 group.paragraphs.forEach((para, idx) => {
 para.translatedText = translatedLines[idx];
 });
-addLog(`  -> ✓ 完美分配：所有段落都已翻译`);
-} else if (translatedLines.length < group.paragraphs.length) {
+} else if (translatedLines.length > expectedCount) {
+// AI返回的段落太多：智能合并多余段落
+addLog(`  -> 段落过多，尝试智能合并...`);
+const linesPerPara = Math.ceil(translatedLines.length / expectedCount);
+group.paragraphs.forEach((para, idx) => {
+const startIdx = idx * linesPerPara;
+const endIdx = Math.min(startIdx + linesPerPara, translatedLines.length);
+const segment = translatedLines.slice(startIdx, endIdx).join(' ');
+para.translatedText = segment;
+});
+} else {
 // AI返回的段落太少：标记未翻译的段落，稍后重试
-addLog(`  -> ⚠️ 警告: 期望${group.paragraphs.length}段，但AI只返回了${translatedLines.length}段`, true);
+addLog(`  -> 段落不足，已翻译部分保留，其余标记重试`, true);
 group.paragraphs.forEach((para, idx) => {
 if (idx < translatedLines.length) {
 para.translatedText = translatedLines[idx];
 } else {
-// 标记为未翻译，保持原文
-para.translatedText = null; // 改为null，表示需要重试
-para.skipReason = `AI返回不完整（返回${translatedLines.length}段，需要${group.paragraphs.length}段）`;
-if (idx < translatedLines.length + 3) { // 只显示前3个未翻译的段落
-addLog(`     段落${idx}未翻译: "${para.originalText.substring(0, 50)}..."`);
-}
-}
-});
-} else {
-// AI返回的段落太多：尝试智能合并
-addLog(`  -> ⚠️ 警告: AI返回了${translatedLines.length}段，但原文只有${group.paragraphs.length}段`);
-group.paragraphs.forEach((para, idx) => {
-if (idx < group.paragraphs.length) {
-// 计算应该分配给这个段落多少行
-const linesPerPara = Math.floor(translatedLines.length / group.paragraphs.length);
-const startIdx = idx * linesPerPara;
-const endIdx = Math.min(startIdx + linesPerPara, translatedLines.length);
-para.translatedText = translatedLines.slice(startIdx, endIdx).join('\n\n');
-} else {
+// 标记为未翻译
 para.translatedText = null;
-para.skipReason = '段落数不匹配';
+para.skipReason = `AI返回不足（${translatedLines.length}/${expectedCount}）`;
 }
 });
 }
@@ -3095,6 +3175,28 @@ addLog(`正在检查原文残留...`);
 let replacedCount = 0;
 let skippedCount = 0;
 
+// 跟踪已处理的元素，避免重复清空同一个元素（修复多段落共享同一元素的问题）
+const replacedElements = new Set();
+const elementTranslations = new Map();
+
+// 首先收集属于同一元素的所有段落
+paragraphs.forEach((para) => {
+if (para.translatedText && para.translatedText !== para.originalText && para.element) {
+if (!elementTranslations.has(para.element)) {
+elementTranslations.set(para.element, []);
+}
+elementTranslations.get(para.element).push(para);
+}
+});
+
+// HTML转义函数
+function escapeHtml(text) {
+const div = doc.createElement('div');
+div.textContent = text;
+return div.innerHTML;
+}
+
+// 然后处理每个元素
 paragraphs.forEach((para, idx) => {
 if (para.translatedText && para.translatedText !== para.originalText) {
 if (para.textNode) {
@@ -3115,17 +3217,45 @@ textNode.textContent = '';
 });
 replacedCount++;
 } else if (para.element) {
-// 情况3: 块级元素 - 清空所有内容并用翻译文本替换
-// 使用innerHTML清空，然后用textContent设置翻译文本
-const originalContent = para.element.innerHTML;
-para.element.innerHTML = '';
-para.element.textContent = para.translatedText;
+// 情况3: 块级元素 - 检查该元素是否已被处理过
+if (replacedElements.has(para.element)) {
+// 已处理过，跳过
+return;
+}
+
+// 标记为已处理
+replacedElements.add(para.element);
+
+// 获取属于该元素的所有翻译段落
+const translations = elementTranslations.get(para.element) || [];
+
+// 检查原始HTML中是否有<br>标签（说明是多段落用<br>分隔的结构）
+const originalHasBr = para.element.innerHTML.includes('<br');
+
+if (originalHasBr && translations.length > 1) {
+// 原始结构是用<br>分隔的，重建内容时保持<br>分隔
+let newContent = '';
+translations.forEach((p, i) => {
+if (i > 0) {
+newContent += '<br class="calibre2"/>';
+}
+newContent += escapeHtml(p.translatedText);
+});
+para.element.innerHTML = newContent;
+replacedCount += translations.length;
+addLog(`  [重建${translations.length}段] 用<br>分隔重建元素内容`);
+} else {
+// 简单情况：直接替换整个元素内容
+para.element.textContent = translations.length === 1
+? para.translatedText
+: translations.map(p => p.translatedText).join('\n\n');
+replacedCount += translations.length;
+}
 
 // 调试：记录前几个段落的替换情况
 if (idx < 5) {
 addLog(`  [段落${idx}] 替换: ${para.originalText.substring(0, 50)}... → ${para.translatedText.substring(0, 50)}...`);
 }
-replacedCount++;
 } else {
 addLog(`  [段落${idx}] 跳过: 缺少element/textNode/textNodes引用`);
 skippedCount++;
@@ -3425,7 +3555,72 @@ processedElements.add(element);
 const rawText = element.textContent;
 const trimText = rawText.trim();
 
-if (trimText.length >= 1) {
+// 检查元素是否包含<br>标签（说明是多段落用<br>分隔的结构）
+const hasBrTags = element.innerHTML.includes('<br');
+
+if (hasBrTags && trimText.length >= 1) {
+// 对于用<br>分隔的内容，按<br>分割成多个段落
+// 先克隆元素，然后遍历其子节点，按<br>分割
+const subParagraphs = [];
+let currentText = '';
+
+// 遍历元素的所有子节点
+Array.from(element.childNodes).forEach(childNode => {
+if (childNode.nodeType === Node.TEXT_NODE) {
+const text = childNode.textContent;
+// 检查是否是全角空格开头的日文段落
+if (text.startsWith('　') || text.trim().length > 0) {
+currentText += text;
+}
+} else if (childNode.nodeType === Node.ELEMENT_NODE) {
+const tagName = childNode.tagName.toLowerCase();
+if (tagName === 'br') {
+// <br>标签表示段落结束
+if (currentText.trim().length > 0) {
+subParagraphs.push(currentText.trim());
+currentText = '';
+}
+} else if (tagName === 'a') {
+// 链接标签，提取文本
+const linkText = childNode.textContent;
+if (linkText.trim().length > 0) {
+if (currentText.length > 0 && !currentText.endsWith('\n')) {
+currentText += ' ';
+}
+currentText += linkText;
+}
+}
+// 其他标签如<span>等，提取文本
+else {
+const text = childNode.textContent;
+if (text && text.trim().length > 0) {
+currentText += text;
+}
+}
+}
+});
+
+// 添加最后一段
+if (currentText.trim().length > 0) {
+subParagraphs.push(currentText.trim());
+}
+
+// 将分割后的段落添加到段落列表
+subParagraphs.forEach((paraText) => {
+if (paraText.length >= 1) {
+paragraphs.push({
+element: element,
+originalText: paraText,
+rawText: paraText,
+index: paragraphs.length,
+skipReason: null
+});
+}
+});
+
+addLog(`  -> 检测到<br>分隔结构，分割为 ${subParagraphs.length} 个段落`);
+} else if (trimText.length >= 1) {
+// 普通情况，整个元素作为一个段落
 paragraphs.push({
 element: element,
 originalText: trimText,
@@ -3609,12 +3804,22 @@ return { success: true, skipped: true };
 let retries = 0;
 while (retries < maxRetries) {
 try {
-// 检查缓存
-const cachedResult = getFromCache(originalText, sourceLang, targetLang);
+// 检查缓存 - 使用无标记的原文作为键
+const cacheKey = group.paragraphs.map(p => p.originalText).join('\n\n');
+const cachedResult = getFromCache(cacheKey, sourceLang, targetLang);
 if (cachedResult) {
 // 使用缓存的翻译结果
 addLog('  -> 使用缓存的翻译结果');
-const translatedLines = cachedResult.split(/\n\n+/).map(line => line.trim()).filter(line => line);
+// 尝试从缓存中提取标记
+const markedMatches = cachedResult.match(/\[P\d+\][^\[]*/g);
+let translatedLines;
+if (markedMatches && markedMatches.length === group.paragraphs.length) {
+translatedLines = markedMatches.map(m => m.replace(/^\[P\d+\]\s*/, ''));
+addLog(`  -> 缓存使用段落标记提取: ${translatedLines.length}个段落`);
+} else {
+translatedLines = cachedResult.split(/\n\n+/).map(line => line.trim()).filter(line => line);
+addLog(`  -> 缓存使用双换行符分割: ${translatedLines.length}个段落`);
+}
 
 group.paragraphs.forEach((para, idx) => {
 if (idx < translatedLines.length) {
@@ -3636,25 +3841,24 @@ originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
 
 // 构建翻译提示词 - 要求保持段落结构
 const paraCount = group.paragraphs.length;
-const translatePrompt = `请将以下${langNames[sourceLang]}文本翻译成${langNames[targetLang]}。
 
-【重要】必须严格按照以下格式返回翻译结果：
-1. 翻译以下${paraCount}个段落
-2. 每个段落翻译完成后，必须空一行（输入两个回车）
-3. 必须返回恰好${paraCount}个翻译段落，多一个或少一个都不行
-4. 只返回翻译后的文本，不要添加任何解释、前言、后记或说明
-5. 翻译所有内容，包括任何英文单词、专有名词等
-6. 绝对禁止添加"Excerpt From"、"版权声明"、"翻译说明"等任何元数据
+// 为每个段落添加序号标记，确保AI按正确顺序翻译
+const numberedText = group.paragraphs.map((p, i) =>
+`[P${i+1}] ${p.originalText}`
+).join('\n\n');
 
-原文（第1段到第${paraCount}段，按顺序）：
-${originalText}
+const translatePrompt = `你是${langNames[sourceLang]}到${langNames[targetLang]}的翻译专家。请翻译以下文本。
 
-【再次强调】：
-- 原文有${paraCount}段
-- 你的译文必须有${paraCount}段
-- 段落之间空一行分隔
-- 只返回译文，不要其他内容
-- 不要添加任何元数据、版权信息或翻译说明`;
+【重要要求】
+1. 原文共${paraCount}个段落，每个段落用[P1]、[P2]...标记
+2. 译文必须保持相同的段落标记和顺序
+3. 每个段落的标记（如[P1]）必须保留在译文开头
+4. 只返回译文，不要有其他内容
+
+原文：
+${numberedText}
+
+译文：`;
 
 // 添加超时控制
 const controller = new AbortController();
@@ -3915,6 +4119,28 @@ addLog(`正在检查原文残留...`);
 let replacedCount = 0;
 let skippedCount = 0;
 
+// 跟踪已处理的元素，避免重复清空同一个元素（修复多段落共享同一元素的问题）
+const replacedElements = new Set();
+const elementTranslations = new Map();
+
+// 首先收集属于同一元素的所有段落
+paragraphs.forEach((para) => {
+if (para.translatedText && para.translatedText !== para.originalText && para.element) {
+if (!elementTranslations.has(para.element)) {
+elementTranslations.set(para.element, []);
+}
+elementTranslations.get(para.element).push(para);
+}
+});
+
+// HTML转义函数
+function escapeHtml(text) {
+const div = doc.createElement('div');
+div.textContent = text;
+return div.innerHTML;
+}
+
+// 然后处理每个元素
 paragraphs.forEach((para, idx) => {
 if (para.translatedText && para.translatedText !== para.originalText) {
 if (para.textNode) {
@@ -3935,17 +4161,45 @@ textNode.textContent = '';
 });
 replacedCount++;
 } else if (para.element) {
-// 情况3: 块级元素 - 清空所有内容并用翻译文本替换
-// 使用innerHTML清空，然后用textContent设置翻译文本
-const originalContent = para.element.innerHTML;
-para.element.innerHTML = '';
-para.element.textContent = para.translatedText;
+// 情况3: 块级元素 - 检查该元素是否已被处理过
+if (replacedElements.has(para.element)) {
+// 已处理过，跳过
+return;
+}
+
+// 标记为已处理
+replacedElements.add(para.element);
+
+// 获取属于该元素的所有翻译段落
+const translations = elementTranslations.get(para.element) || [];
+
+// 检查原始HTML中是否有<br>标签（说明是多段落用<br>分隔的结构）
+const originalHasBr = para.element.innerHTML.includes('<br');
+
+if (originalHasBr && translations.length > 1) {
+// 原始结构是用<br>分隔的，重建内容时保持<br>分隔
+let newContent = '';
+translations.forEach((p, i) => {
+if (i > 0) {
+newContent += '<br class="calibre2"/>';
+}
+newContent += escapeHtml(p.translatedText);
+});
+para.element.innerHTML = newContent;
+replacedCount += translations.length;
+addLog(`  [重建${translations.length}段] 用<br>分隔重建元素内容`);
+} else {
+// 简单情况：直接替换整个元素内容
+para.element.textContent = translations.length === 1
+? para.translatedText
+: translations.map(p => p.translatedText).join('\n\n');
+replacedCount += translations.length;
+}
 
 // 调试：记录前几个段落的替换情况
 if (idx < 5) {
 addLog(`  [段落${idx}] 替换: ${para.originalText.substring(0, 50)}... → ${para.translatedText.substring(0, 50)}...`);
 }
-replacedCount++;
 } else {
 addLog(`  [段落${idx}] 跳过: 缺少element/textNode/textNodes引用`);
 skippedCount++;
