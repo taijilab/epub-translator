@@ -49,6 +49,49 @@ const key = getCacheKey(text, sourceLang, targetLang);
 return translationCache.get(key);
 }
 
+// ===== 性能优化全局常量 =====
+
+// 并发信号量：控制最大并发 API 请求数，防止限流和内存峰值
+function createSemaphore(maxConcurrent) {
+let running = 0;
+const queue = [];
+return async function acquire(fn) {
+if (running >= maxConcurrent) {
+await new Promise(resolve => queue.push(resolve));
+}
+running++;
+try {
+return await fn();
+} finally {
+running--;
+if (queue.length > 0) queue.shift()();
+}
+};
+}
+const translationSemaphore = createSemaphore(15); // 最大15个并发API请求
+
+// 全局语言名称映射（替代文件中多处局部定义）
+const LANG_NAMES = {
+'en': '英语', 'zh': '中文', 'ja': '日语', 'ko': '韩语',
+'fr': '法语', 'es': '西班牙语', 'de': '德语', 'ru': '俄语', 'pt': '葡萄牙语'
+};
+const LANG_CODES = {
+'en': 'EN', 'zh': 'ZH', 'ja': 'JA', 'ko': 'KO',
+'fr': 'FR', 'es': 'ES', 'de': 'DE', 'ru': 'RU', 'pt': 'PT'
+};
+
+// 块级元素集合（Set.has() 为 O(1)，替代多处 Array.includes() O(n) 查找）
+const BLOCK_TAGS = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+'li', 'td', 'th', 'blockquote', 'article', 'section', 'header', 'footer',
+'aside', 'main', 'nav', 'figure', 'figcaption', 'caption', 'address', 'pre',
+'dl', 'dt', 'dd']);
+
+// 日志队列（RAF批量刷新，减少DOM操作频次）
+const _logQueue = [];
+let _logRafId = null;
+
+// ===== 性能优化全局常量结束 =====
+
 // Multi-file handling
 let translatedEpubList = [];
 let isBatchMode = false;
@@ -715,18 +758,6 @@ listContainer.innerHTML = '';
 const sourceLang = document.querySelector('input[name="sourceLang"]:checked').value;
 const targetLang = document.querySelector('input[name="targetLang"]:checked').value;
 
-const langNames = {
-'en': '英语',
-'zh': '中文',
-'ja': '日语',
-'ko': '韩语',
-'fr': '法语',
-'es': '西班牙语',
-'de': '德语',
-'ru': '俄语',
-'pt': '葡萄牙语'
-};
-
 // 为每个文件创建列表项
 translatedEpubList.forEach((fileData, index) => {
 const fileItem = document.createElement('div');
@@ -734,7 +765,7 @@ fileItem.className = 'bg-white border border-gray-200 rounded-lg p-4 hover:shado
 
 // 生成文件名
 const originalName = fileData.fileName.replace('.epub', '');
-const displayName = `${originalName} (${langNames[sourceLang]}→${langNames[targetLang]})`;
+const displayName = `${originalName} (${LANG_NAMES[sourceLang]}→${LANG_NAMES[targetLang]})`;
 
 fileItem.innerHTML = `
 <div class="flex items-center justify-between">
@@ -817,21 +848,9 @@ return;
 const sourceLang = document.querySelector('input[name="sourceLang"]:checked').value;
 const targetLang = document.querySelector('input[name="targetLang"]:checked').value;
 
-const langNames = {
-'en': 'EN',
-'zh': 'ZH',
-'ja': 'JA',
-'ko': 'KO',
-'fr': 'FR',
-'es': 'ES',
-'de': 'DE',
-'ru': 'RU',
-'pt': 'PT'
-};
-
 // 生成文件名
 const originalName = fileData.fileName.replace('.epub', '');
-const newName = `${originalName}_${langNames[sourceLang]}to${langNames[targetLang]}_translated.epub`;
+const newName = `${originalName}_${LANG_CODES[sourceLang]}to${LANG_CODES[targetLang]}_translated.epub`;
 
 // 生成并下载
 const content = await fileData.translatedEpub.generateAsync({ type: 'blob' });
@@ -1706,11 +1725,10 @@ const patterns = [
 ];
 
 for (const pattern of patterns) {
-const matches = (convertedHtml.match(pattern) || []).length;
-if (matches > 0) {
-convertedHtml = convertedHtml.replace(pattern, 'writing-mode: horizontal-tb;');
-conversionCount += matches;
-}
+convertedHtml = convertedHtml.replace(pattern, () => {
+conversionCount++;
+return 'writing-mode: horizontal-tb;';
+});
 }
 
 if (conversionCount > 0) {
@@ -1734,178 +1752,114 @@ addLog(`  -> ✓ 移除 -epub-writing-mode: ${epubMatches} 个`);
 }
 
 // 3. 转换方向属性：direction: rtl -> direction: ltr
-const directionRtlBefore = (convertedHtml.match(/direction\s*:\s*rtl/gi) || []).length;
+let directionRtlBefore = 0;
+convertedHtml = convertedHtml.replace(/direction\s*:\s*rtl\s*;?/gi, () => {
+directionRtlBefore++;
+return 'direction: ltr;';
+});
 if (directionRtlBefore > 0) {
-convertedHtml = convertedHtml.replace(
-/direction\s*:\s*rtl\s*;?/gi,
-'direction: ltr;'
-);
 addLog(`  -> ✓ 转换方向 rtl->ltr: ${directionRtlBefore} 个`);
 }
 
 // 4. 转换文本对齐：text-align: right -> text-align: left
-// 但要小心，不要影响正常的居中对齐
-const textAlignRightBefore = (convertedHtml.match(/text-align\s*:\s*right/gi) || []).length;
+let textAlignRightBefore = 0;
+convertedHtml = convertedHtml.replace(/text-align\s*:\s*right\s*;?/gi, () => {
+textAlignRightBefore++;
+return 'text-align: left;';
+});
 if (textAlignRightBefore > 0) {
-// 只转换明确是right的对齐
-convertedHtml = convertedHtml.replace(
-/text-align\s*:\s*right\s*;?/gi,
-'text-align: left;'
-);
 addLog(`  -> ✓ 转换对齐 right->left: ${textAlignRightBefore} 个`);
 }
 
 // 5. 移除text-orientation属性（竖排专用）
-const orientationBefore = (convertedHtml.match(/text-orientation/gi) || []).length;
+let orientationBefore = 0;
+convertedHtml = convertedHtml.replace(/text-orientation\s*:\s*\w+\s*;?/gi, () => {
+orientationBefore++;
+return '';
+});
 if (orientationBefore > 0) {
-convertedHtml = convertedHtml.replace(
-/text-orientation\s*:\s*\w+\s*;?/gi,
-''
-);
 addLog(`  -> ✓ 移除 text-orientation: ${orientationBefore} 个`);
 }
 
 // 6. 移除text-combine-upright（文字组合属性）
-const combineBefore = (convertedHtml.match(/text-combine-upright/gi) || []).length;
+let combineBefore = 0;
+convertedHtml = convertedHtml.replace(/text-combine-upright\s*:\s*\w+\s*;?/gi, () => {
+combineBefore++;
+return '';
+});
 if (combineBefore > 0) {
-convertedHtml = convertedHtml.replace(
-/text-combine-upright\s*:\s*\w+\s*;?/gi,
-''
-);
 addLog(`  -> ✓ 移除 text-combine-upright: ${combineBefore} 个`);
 }
 
 // 7. 移除layout-grid相关属性（日文竖排常用）
-const layoutGridBefore = (convertedHtml.match(/layout-grid/gi) || []).length;
+let layoutGridBefore = 0;
+convertedHtml = convertedHtml.replace(/layout-grid\s*:[^;]+;?/gi, () => {
+layoutGridBefore++;
+return '';
+});
 if (layoutGridBefore > 0) {
-convertedHtml = convertedHtml.replace(
-/layout-grid\s*:[^;]+;?/gi,
-''
-);
 addLog(`  -> ✓ 移除 layout-grid: ${layoutGridBefore} 个`);
 }
 
 // 8. 处理可能的page-progression-direction属性（CSS格式）
-const pageProgressionBefore = (convertedHtml.match(/page-progression-direction\s*:\s*rtl/gi) || []).length;
+let pageProgressionBefore = 0;
+convertedHtml = convertedHtml.replace(/page-progression-direction\s*:\s*rtl\s*;?/gi, () => {
+pageProgressionBefore++;
+return 'page-progression-direction: ltr;';
+});
 if (pageProgressionBefore > 0) {
-convertedHtml = convertedHtml.replace(
-/page-progression-direction\s*:\s*rtl\s*;?/gi,
-'page-progression-direction: ltr;'
-);
 addLog(`  -> ✓ 转换CSS页面方向 rtl->ltr: ${pageProgressionBefore} 个`);
 }
 
 // 9. 处理page-spread-direction属性
-const pageSpreadBefore = (convertedHtml.match(/page-spread-direction\s*:\s*rtl/gi) || []).length;
+let pageSpreadBefore = 0;
+convertedHtml = convertedHtml.replace(/page-spread-direction\s*:\s*rtl\s*;?/gi, () => {
+pageSpreadBefore++;
+return 'page-spread-direction: ltr;';
+});
 if (pageSpreadBefore > 0) {
-convertedHtml = convertedHtml.replace(
-/page-spread-direction\s*:\s*rtl\s*;?/gi,
-'page-spread-direction: ltr;'
-);
 addLog(`  -> ✓ 转换页面展开方向 rtl->ltr: ${pageSpreadBefore} 个`);
 }
 
-// 10. 处理属性格式的page-progression-direction（XML属性，多种引号格式）
-const pageProgressionAttrDouble = (convertedHtml.match(/page-progression-direction\s*=\s*"rtl"/gi) || []).length;
-const pageProgressionAttrSingle = (convertedHtml.match(/page-progression-direction\s*=\s*'rtl'/gi) || []).length;
-const pageProgressionAttrNoQuote = (convertedHtml.match(/page-progression-direction\s*=\s*rtl(?!\w)/gi) || []).length;
-const pageProgressionAttrTotal = pageProgressionAttrDouble + pageProgressionAttrSingle + pageProgressionAttrNoQuote;
-
+// 10. 处理属性格式的page-progression-direction（XML属性，合并多种引号格式）
+let pageProgressionAttrTotal = 0;
+convertedHtml = convertedHtml.replace(/page-progression-direction\s*=\s*(['"]?)rtl\1(?!\w)/gi, (_, quote) => {
+pageProgressionAttrTotal++;
+return `page-progression-direction=${quote}ltr${quote}`;
+});
 if (pageProgressionAttrTotal > 0) {
-// 双引号格式
-if (pageProgressionAttrDouble > 0) {
-convertedHtml = convertedHtml.replace(
-/page-progression-direction\s*=\s*"rtl"/gi,
-'page-progression-direction="ltr"'
-);
-}
-// 单引号格式
-if (pageProgressionAttrSingle > 0) {
-convertedHtml = convertedHtml.replace(
-/page-progression-direction\s*=\s*'rtl'/gi,
-"page-progression-direction='ltr'"
-);
-}
-// 无引号格式
-if (pageProgressionAttrNoQuote > 0) {
-convertedHtml = convertedHtml.replace(
-/page-progression-direction\s*=\s*rtl(?!\w)/gi,
-'page-progression-direction=ltr'
-);
-}
 addLog(`  -> ✓ 转换XML页面方向属性 rtl->ltr: ${pageProgressionAttrTotal} 个`);
 }
 
-// 11. 处理属性格式的page-spread-direction（多种引号格式）
-const pageSpreadAttrDouble = (convertedHtml.match(/page-spread-direction\s*=\s*"rtl"/gi) || []).length;
-const pageSpreadAttrSingle = (convertedHtml.match(/page-spread-direction\s*=\s*'rtl'/gi) || []).length;
-const pageSpreadAttrNoQuote = (convertedHtml.match(/page-spread-direction\s*=\s*rtl(?!\w)/gi) || []).length;
-const pageSpreadAttrTotal = pageSpreadAttrDouble + pageSpreadAttrSingle + pageSpreadAttrNoQuote;
-
+// 11. 处理属性格式的page-spread-direction（合并多种引号格式，单次扫描）
+let pageSpreadAttrTotal = 0;
+convertedHtml = convertedHtml.replace(/page-spread-direction\s*=\s*(['"]?)rtl\1(?!\w)/gi, (_, quote) => {
+pageSpreadAttrTotal++;
+return `page-spread-direction=${quote}ltr${quote}`;
+});
 if (pageSpreadAttrTotal > 0) {
-// 双引号格式
-if (pageSpreadAttrDouble > 0) {
-convertedHtml = convertedHtml.replace(
-/page-spread-direction\s*=\s*"rtl"/gi,
-'page-spread-direction="ltr"'
-);
-}
-// 单引号格式
-if (pageSpreadAttrSingle > 0) {
-convertedHtml = convertedHtml.replace(
-/page-spread-direction\s*=\s*'rtl'/gi,
-"page-spread-direction='ltr'"
-);
-}
-// 无引号格式
-if (pageSpreadAttrNoQuote > 0) {
-convertedHtml = convertedHtml.replace(
-/page-spread-direction\s*=\s*rtl(?!\w)/gi,
-'page-spread-direction=ltr'
-);
-}
 addLog(`  -> ✓ 转换XML页面展开属性 rtl->ltr: ${pageSpreadAttrTotal} 个`);
 }
 
-// 12. 处理可能的rendition:orientation属性（多种引号格式）
-const orientationAttrDouble = (convertedHtml.match(/rendition:orientation\s*=\s*"vertical"/gi) || []).length;
-const orientationAttrSingle = (convertedHtml.match(/rendition:orientation\s*=\s*'vertical'/gi) || []).length;
-const orientationAttrTotal = orientationAttrDouble + orientationAttrSingle;
-
+// 12. 处理可能的rendition:orientation属性（合并多种引号格式，单次扫描）
+let orientationAttrTotal = 0;
+convertedHtml = convertedHtml.replace(/rendition:orientation\s*=\s*(['"]?)vertical\1/gi, (_, quote) => {
+orientationAttrTotal++;
+return `rendition:orientation=${quote}auto${quote}`;
+});
 if (orientationAttrTotal > 0) {
-if (orientationAttrDouble > 0) {
-convertedHtml = convertedHtml.replace(
-/rendition:orientation\s*=\s*"vertical"/gi,
-'rendition:orientation="auto"'
-);
-}
-if (orientationAttrSingle > 0) {
-convertedHtml = convertedHtml.replace(
-/rendition:orientation\s*=\s*'vertical'/gi,
-"rendition:orientation='auto'"
-);
-}
 addLog(`  -> ✓ 移除竖排方向属性: ${orientationAttrTotal} 个`);
 }
 
 // 13. 处理rendition:spread属性（控制页面展开方式）
-const renditionSpreadRight = (convertedHtml.match(/rendition:spread\s*=\s*"right"/gi) || []).length;
-const renditionSpreadLeft = (convertedHtml.match(/rendition:spread\s*=\s*"left"/gi) || []).length;
-
-if (renditionSpreadRight > 0) {
-convertedHtml = convertedHtml.replace(
-/rendition:spread\s*=\s*"right"/gi,
-'rendition:spread="auto"'
-);
-addLog(`  -> ✓ 转换spread属性 right->auto: ${renditionSpreadRight} 个`);
-}
-
-if (renditionSpreadLeft > 0) {
-convertedHtml = convertedHtml.replace(
-/rendition:spread\s*=\s*"left"/gi,
-'rendition:spread="auto"'
-);
-addLog(`  -> ✓ 转换spread属性 left->auto: ${renditionSpreadLeft} 个`);
+// 13. 处理rendition:spread属性（合并 right/left 为单次扫描）
+let renditionSpreadTotal = 0;
+convertedHtml = convertedHtml.replace(/rendition:spread\s*=\s*"(?:right|left)"/gi, () => {
+renditionSpreadTotal++;
+return 'rendition:spread="auto"';
+});
+if (renditionSpreadTotal > 0) {
+addLog(`  -> ✓ 转换spread属性 right/left->auto: ${renditionSpreadTotal} 个`);
 }
 
 if (conversionCount > 0 || epubMatches > 0 || directionRtlBefore > 0) {
@@ -1949,20 +1903,8 @@ return;
 
 // 检查用户选择的源语言和检测到的语言是否一致
 if (detectedSourceLangCode && detectedSourceLangCode !== sourceLang) {
-const langNames = {
-'zh': '中文',
-'en': '英语',
-'ja': '日语',
-'ko': '韩语',
-'fr': '法语',
-'es': '西班牙语',
-'de': '德语',
-'ru': '俄语',
-'pt': '葡萄牙语'
-};
-
-const detectedLangName = langNames[detectedSourceLangCode] || detectedSourceLangCode;
-const selectedLangName = langNames[sourceLang] || sourceLang;
+const detectedLangName = LANG_NAMES[detectedSourceLangCode] || detectedSourceLangCode;
+const selectedLangName = LANG_NAMES[sourceLang] || sourceLang;
 
 const warningMessage =
 `⚠️ 语言检测警告\n\n` +
@@ -2396,20 +2338,9 @@ textNodes.push(node);
 }
 
 // Demo translation - show source and target language
-const langNames = {
-'en': '英语',
-'zh': '中文',
-'ja': '日语',
-'ko': '韩语',
-'fr': '法语',
-'es': '西班牙语',
-'de': '德语',
-'ru': '俄语',
-'pt': '葡萄牙语'
-};
 
 textNodes.forEach(node => {
-node.textContent = `[${langNames[sourceLang]}→${langNames[targetLang]}] ` + node.textContent;
+node.textContent = `[${LANG_NAMES[sourceLang]}→${LANG_NAMES[targetLang]}] ` + node.textContent;
 });
 
 // Return with proper HTML structure
@@ -2423,19 +2354,6 @@ const baseUrl = document.getElementById('zhipuBaseUrl').value || 'https://open.b
 if (!apiKey) {
 throw new Error('请输入智谱AI API Key');
 }
-
-// 语言代码映射
-const langNames = {
-'en': '英语',
-'zh': '中文',
-'ja': '日语',
-'ko': '韩语',
-'fr': '法语',
-'es': '西班牙语',
-'de': '德语',
-'ru': '俄语',
-'pt': '葡萄牙语'
-};
 
 // 清理AI翻译结果中的提示词残留
 function cleanTranslatedText(rawText) {
@@ -2550,11 +2468,7 @@ let foundBlockElement = false;
 // 向上查找块级元素
 while (element && element !== doc.body) {
 const tagName = element.tagName.toLowerCase();
-const blockTags = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'th',
-'blockquote', 'article', 'section', 'header', 'footer', 'aside', 'main', 'nav',
-'figure', 'figcaption', 'caption', 'address', 'pre', 'dl', 'dt', 'dd'];
-
-if (blockTags.includes(tagName)) {
+if (BLOCK_TAGS.has(tagName)) {
 foundBlockElement = true;
 break;
 }
@@ -2656,27 +2570,7 @@ isInline: true
 }
 }
 
-// 统计文本节点数量（用于调试）
-const textWalker = document.createTreeWalker(
-doc.body,
-NodeFilter.SHOW_TEXT,
-{
-acceptNode: function(node) {
-return node.textContent && node.textContent.trim().length > 0
-? NodeFilter.FILTER_ACCEPT
-: NodeFilter.FILTER_REJECT;
-}
-},
-false
-);
-
-let totalTextNodes = 0;
-let textNode;
-while (textNode = textWalker.nextNode()) {
-totalTextNodes++;
-}
-
-addLog(`找到 ${paragraphs.length} 个段落 (共 ${totalTextNodes} 个文本节点)`);
+addLog(`找到 ${paragraphs.length} 个段落`);
 
 // 诊断：显示前10个提取的段落内容
 addLog(`=== 前10个提取的段落 ===`);
@@ -2781,8 +2675,8 @@ const preview = group.combinedText.substring(0, 100);
 addLog(`  组${idx}: ${group.paragraphs.length}段, ${group.combinedText.length}字 - "${preview}..."`);
 });
 
-// 分段并发翻译 - 大幅提升并发数
-const CONCURRENT_BATCHES = 200; // 提升到200，最大化利用并发能力
+// 信号量控制并发（translationSemaphore 限制最大15个并发请求），一次性处理所有组
+const CONCURRENT_BATCHES = Infinity; // 实际并发由 translationSemaphore 控制
 let translatedCount = 0;
 const maxRetries = 3;
 const translationStartTime = Date.now();  // 记录翻译开始时间
@@ -2797,8 +2691,9 @@ break;
 const batchEnd = Math.min(batchStart + CONCURRENT_BATCHES, groupedParagraphs.length);
 const batch = groupedParagraphs.slice(batchStart, batchEnd);
 
-// 并发翻译当前批次
+// 并发翻译当前批次（信号量控制实际并发数）
 const translationPromises = batch.map(async (group) => {
+return translationSemaphore(async () => {
 const originalText = group.combinedText;
 
 // 跳过纯数字、标点或过短文本
@@ -2847,7 +2742,7 @@ originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
 // 构建翻译提示词 - 简化格式，不使用标记
 const paraCount = group.paragraphs.length;
 
-const translatePrompt = `你是${langNames[sourceLang]}到${langNames[targetLang]}的翻译专家。
+const translatePrompt = `你是${LANG_NAMES[sourceLang]}到${LANG_NAMES[targetLang]}的翻译专家。
 
 请翻译以下${paraCount}个段落，译文格式要求：
 
@@ -3021,7 +2916,8 @@ await new Promise(resolve => setTimeout(resolve, backoffDelay));
 }
 
 return { success: false, error: 'Max retries exceeded' };
-});
+}); // end translationSemaphore
+}); // end batch.map
 
 // 等待当前批次完成
 const results = await Promise.all(translationPromises);
@@ -3098,7 +2994,7 @@ addLog(`  [${retryCount}/${untranslatedParagraphs.length}] 重试段落 ${para.i
 
 try {
 // 构建单段落翻译提示词
-const singleTranslatePrompt = `请将以下${langNames[sourceLang]}文本翻译成${langNames[targetLang]}。
+const singleTranslatePrompt = `请将以下${LANG_NAMES[sourceLang]}文本翻译成${LANG_NAMES[targetLang]}。
 
 原文：
 ${para.originalText}
@@ -3407,90 +3303,6 @@ if (!apiKey) {
 throw new Error('请输入OpenRouter API Key');
 }
 
-// 语言代码映射
-const langNames = {
-'en': '英语',
-'zh': '中文',
-'ja': '日语',
-'ko': '韩语',
-'fr': '法语',
-'es': '西班牙语',
-'de': '德语',
-'ru': '俄语',
-'pt': '葡萄牙语'
-};
-
-// 清理AI翻译结果中的提示词残留
-function cleanTranslatedText(rawText) {
-let cleaned = rawText;
-
-// 移除常见的AI回复前缀
-const prefixesToRemove = [
-/^(以下是翻译结果[：:]\s*)/i,
-/^(翻译如下[：:]\s*)/i,
-/^(根据要求翻译[：:]\s*)/i,
-/^(好的，以下是翻译[：:]\s*)/i,
-/^(好的[，,]?我来翻译[：:]\s*)/i,
-/^(当然[，,]?以下是翻译[：:]\s*)/i,
-/^\[翻译\]\s*/i,
-/^(Translation[：:]\s*)/i,
-/^(Here is the translation[：:]\s*)/i,
-/^(（根据用户要求，严格遵循.*?）)\s*/i,
-/^(（译文严格遵守所有要求.*?）)\s*/i,
-];
-
-for (const prefix of prefixesToRemove) {
-cleaned = cleaned.replace(prefix, '');
-}
-
-// 移除常见的AI回复后缀
-const suffixesToRemove = [
-/\s*(请注意：以上是翻译结果)\s*$/i,
-/\s*(希望这个翻译对您有帮助)\s*$/i,
-/\s*(如有需要可以进一步调整)\s*$/i,
-];
-
-for (const suffix of suffixesToRemove) {
-cleaned = cleaned.replace(suffix, '');
-}
-
-// 移除中间可能出现的解释性文字（如"翻译说明："等）
-cleaned = cleaned.replace(/\n\n翻译说明[：:].*$/gi, '');
-cleaned = cleaned.replace(/\n\nNote[：:].*$/gi, '');
-
-// 移除版权信息和元数据（改进版：支持多行匹配）
-const metadataPatterns = [
-// 匹配 "Excerpt From" 开始的整个块（多行）
-/Excerpt From\s*[\s\S]*?This material may be protected by copyright[\s\S]*?$/gim,
-// 单独匹配各种元数据模式（只匹配整行）
-/^Excerpt From.*$/gim,
-/^This material may be protected by copyright.*$/gim,
-// 只匹配包含语言标记的元数据行（整行）
-/^\s*\[.*?[日中韩英法德俄葡西語語语][\s\-→]*.*?\]\s*$/gim,
-// 括号内的说明文字（整行）
-/^\s*（根据用户要求.*?）\s*$/gim,
-/^\s*（译文严格遵守.*?）\s*$/gim,
-// 只包含日文人名的行（整行）
-/^[あ-んア-ン一-龯\s]+（[^\)]*）?\s*$/gim,
-// 只包含中文人名的行（整行）
-/^[一-龯\s]+（[^\)]*）?\s*$/gim,
-];
-
-for (const pattern of metadataPatterns) {
-cleaned = cleaned.replace(pattern, '');
-}
-
-// 移除多余的空白行
-cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-
-// 最后检查：如果清理后为空或太短，返回原文
-if (cleaned.trim().length < 2) {
-return rawText.trim();
-}
-
-return cleaned.trim();
-}
-
 // 使用DOMParser解析HTML
 const parser = new DOMParser();
 const doc = parser.parseFromString(text, 'text/html');
@@ -3533,11 +3345,7 @@ let foundBlockElement = false;
 // 向上查找块级元素
 while (element && element !== doc.body) {
 const tagName = element.tagName.toLowerCase();
-const blockTags = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'th',
-'blockquote', 'article', 'section', 'header', 'footer', 'aside', 'main', 'nav',
-'figure', 'figcaption', 'caption', 'address', 'pre', 'dl', 'dt', 'dd'];
-
-if (blockTags.includes(tagName)) {
+if (BLOCK_TAGS.has(tagName)) {
 foundBlockElement = true;
 break;
 }
@@ -3639,27 +3447,7 @@ isInline: true
 }
 }
 
-// 统计文本节点数量（用于调试）
-const textWalker = document.createTreeWalker(
-doc.body,
-NodeFilter.SHOW_TEXT,
-{
-acceptNode: function(node) {
-return node.textContent && node.textContent.trim().length > 0
-? NodeFilter.FILTER_ACCEPT
-: NodeFilter.FILTER_REJECT;
-}
-},
-false
-);
-
-let totalTextNodes = 0;
-let textNode;
-while (textNode = textWalker.nextNode()) {
-totalTextNodes++;
-}
-
-addLog(`找到 ${paragraphs.length} 个段落 (共 ${totalTextNodes} 个文本节点)`);
+addLog(`找到 ${paragraphs.length} 个段落`);
 
 // 诊断：显示前10个提取的段落内容
 addLog(`=== 前10个提取的段落 ===`);
@@ -3764,8 +3552,8 @@ const preview = group.combinedText.substring(0, 100);
 addLog(`  组${idx}: ${group.paragraphs.length}段, ${group.combinedText.length}字 - "${preview}..."`);
 });
 
-// 分段并发翻译 - 大幅提升并发数
-const CONCURRENT_BATCHES = 200; // 提升到200，最大化利用并发能力
+// 信号量控制并发（translationSemaphore 限制最大15个并发请求），一次性处理所有组
+const CONCURRENT_BATCHES = Infinity; // 实际并发由 translationSemaphore 控制
 let translatedCount = 0;
 const maxRetries = 3;
 const translationStartTime = Date.now();  // 记录翻译开始时间
@@ -3780,8 +3568,9 @@ break;
 const batchEnd = Math.min(batchStart + CONCURRENT_BATCHES, groupedParagraphs.length);
 const batch = groupedParagraphs.slice(batchStart, batchEnd);
 
-// 并发翻译当前批次
+// 并发翻译当前批次（信号量控制实际并发数）
 const translationPromises = batch.map(async (group) => {
+return translationSemaphore(async () => {
 const originalText = group.combinedText;
 
 // 跳过纯数字、标点或过短文本
@@ -3830,7 +3619,7 @@ originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
 // 构建翻译提示词 - 简化格式，不使用标记
 const paraCount = group.paragraphs.length;
 
-const translatePrompt = `你是${langNames[sourceLang]}到${langNames[targetLang]}的翻译专家。
+const translatePrompt = `你是${LANG_NAMES[sourceLang]}到${LANG_NAMES[targetLang]}的翻译专家。
 
 请翻译以下${paraCount}个段落，译文格式要求：
 
@@ -3948,7 +3737,8 @@ await new Promise(resolve => setTimeout(resolve, 1000 * retries));
 }
 
 return { success: false, error: 'Max retries exceeded' };
-});
+}); // end translationSemaphore
+}); // end batch.map
 
 // 等待当前批次完成
 const results = await Promise.all(translationPromises);
@@ -4025,7 +3815,7 @@ addLog(`  [${retryCount}/${untranslatedParagraphs.length}] 重试段落 ${para.i
 
 try {
 // 构建单段落翻译提示词
-const singleTranslatePrompt = `请将以下${langNames[sourceLang]}文本翻译成${langNames[targetLang]}。
+const singleTranslatePrompt = `请将以下${LANG_NAMES[sourceLang]}文本翻译成${LANG_NAMES[targetLang]}。
 
 原文：
 ${para.originalText}
@@ -4375,26 +4165,13 @@ const docType = docTypeMatch ? docTypeMatch[0] : '';
 const parser = new DOMParser();
 const doc = parser.parseFromString(text, 'text/xml');
 
-// Language names for display
-const langNames = {
-'en': '英语',
-'zh': '中文',
-'ja': '日语',
-'ko': '韩语',
-'fr': '法语',
-'es': '西班牙语',
-'de': '德语',
-'ru': '俄语',
-'pt': '葡萄牙语'
-};
-
 // Translate title - 不添加前缀，保持原标题不变
 // 注释：添加语言标记前缀会导致iBooks解析错误
 const titles = doc.getElementsByTagName('dc:title');
 // 保持原标题不变，不做任何修改
 // for (let title of titles) {
 //     if (title.textContent) {
-//         title.textContent = `[${langNames[sourceLang]}→${langNames[targetLang]}] ` + title.textContent;
+//         title.textContent = `[${LANG_NAMES[sourceLang]}→${LANG_NAMES[targetLang]}] ` + title.textContent;
 //     }
 // }
 
@@ -4409,11 +4186,21 @@ progressBar.style.width = percent + '%';
 }
 
 function addLog(message, isError = false) {
+_logQueue.push({ message, isError });
+if (!_logRafId) {
+_logRafId = requestAnimationFrame(() => {
+_logRafId = null;
+const fragment = document.createDocumentFragment();
+_logQueue.splice(0).forEach(({ message, isError }) => {
 const logEntry = document.createElement('div');
 logEntry.textContent = `> ${message}`;
 logEntry.className = isError ? 'text-red-600' : 'text-gray-600';
-progressLog.appendChild(logEntry);
-progressLog.scrollTop = progressLog.scrollHeight;
+fragment.appendChild(logEntry);
+});
+progressLog.appendChild(fragment); // 一次 DOM 操作插入所有日志
+progressLog.scrollTop = progressLog.scrollHeight; // 一次滚动
+});
+}
 }
 
 async function handleDownload() {
@@ -4428,28 +4215,14 @@ const batchZip = new JSZip();
 const sourceLang = document.querySelector('input[name="sourceLang"]:checked').value;
 const targetLang = document.querySelector('input[name="targetLang"]:checked').value;
 
-// 语言代码映射
-const langNames = {
-'en': 'EN',
-'zh': 'ZH',
-'ja': 'JA',
-'ko': 'KO',
-'fr': 'FR',
-'es': 'ES',
-'de': 'DE',
-'ru': 'RU',
-'pt': 'PT'
-};
-
 // 将每个翻译后的EPUB添加到ZIP中
 for (let i = 0; i < translatedEpubList.length; i++) {
 const fileData = translatedEpubList[i];
-const translatedContent = await fileData.translatedEpub.generateAsync({ type: 'blob' });
-const arrayBuffer = await translatedContent.arrayBuffer();
+const arrayBuffer = await fileData.translatedEpub.generateAsync({ type: 'uint8array' }); // 直接生成，避免 blob→arrayBuffer 中间转换
 
 // 生成文件名: 原文件名_ZHtoEN_translated.epub
 const originalName = fileData.fileName.replace('.epub', '');
-const newName = `${originalName}_${langNames[sourceLang]}to${langNames[targetLang]}_translated.epub`;
+const newName = `${originalName}_${LANG_CODES[sourceLang]}to${LANG_CODES[targetLang]}_translated.epub`;
 
 batchZip.file(newName, arrayBuffer);
 addLog(`  -> 添加文件: ${newName}`);
@@ -4490,21 +4263,8 @@ const originalName = epubFile.name.replace('.epub', '');
 const sourceLang = document.querySelector('input[name="sourceLang"]:checked').value;
 const targetLang = document.querySelector('input[name="targetLang"]:checked').value;
 
-// 语言代码映射
-const langNames = {
-'en': 'EN',
-'zh': 'ZH',
-'ja': 'JA',
-'ko': 'KO',
-'fr': 'FR',
-'es': 'ES',
-'de': 'DE',
-'ru': 'RU',
-'pt': 'PT'
-};
-
 // 生成格式: 原文件名_ZHtoEN_translated.epub
-const newName = `${originalName}_${langNames[sourceLang]}to${langNames[targetLang]}_translated.epub`;
+const newName = `${originalName}_${LANG_CODES[sourceLang]}to${LANG_CODES[targetLang]}_translated.epub`;
 
 a.download = newName;
 document.body.appendChild(a);
