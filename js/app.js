@@ -2822,16 +2822,9 @@ const cachedResult = getFromCache(cacheKey, sourceLang, targetLang);
 if (cachedResult) {
 // 使用缓存的翻译结果
 addLog('  -> 使用缓存的翻译结果');
-// 尝试从缓存中提取标记
-const markedMatches = cachedResult.match(/\[P\d+\][^\[]*/g);
-let translatedLines;
-if (markedMatches && markedMatches.length === group.paragraphs.length) {
-translatedLines = markedMatches.map(m => m.replace(/^\[P\d+\]\s*/, ''));
-addLog(`  -> 缓存使用段落标记提取: ${translatedLines.length}个段落`);
-} else {
-translatedLines = cachedResult.split(/\n\n+/).map(line => line.trim()).filter(line => line);
-addLog(`  -> 缓存使用双换行符分割: ${translatedLines.length}个段落`);
-}
+// 清理可能残留的段落标记
+const cleanedCached = cachedResult.replace(/\[P\d+\]\s*/g, '').replace(/^\[P\d+\]/g, '');
+const translatedLines = cleanedCached.split(/\n\n+/).map(line => line.trim()).filter(line => line);
 
 group.paragraphs.forEach((para, idx) => {
 if (idx < translatedLines.length) {
@@ -2851,24 +2844,20 @@ originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
 '翻译中...'
 );
 
-// 构建翻译提示词 - 要求保持段落结构
+// 构建翻译提示词 - 简化格式，不使用标记
 const paraCount = group.paragraphs.length;
 
-// 为每个段落添加序号标记，确保AI按正确顺序翻译
-const numberedText = group.paragraphs.map((p, i) =>
-`[P${i+1}] ${p.originalText}`
-).join('\n\n');
+const translatePrompt = `你是${langNames[sourceLang]}到${langNames[targetLang]}的翻译专家。
 
-const translatePrompt = `你是${langNames[sourceLang]}到${langNames[targetLang]}的翻译专家。请翻译以下文本。
+请翻译以下${paraCount}个段落，译文格式要求：
 
-【重要要求】
-1. 原文共${paraCount}个段落，每个段落用[P1]、[P2]...标记
-2. 译文必须保持相同的段落标记和顺序
-3. 每个段落的标记（如[P1]）必须保留在译文开头
-4. 只返回译文，不要有其他内容
+1. 每个段落翻译后空一行（输入两个回车）
+2. 必须返回恰好${paraCount}个翻译段落
+3. 只返回译文，不要有任何解释
+4. 专有名词可直接音译
 
 原文：
-${numberedText}
+${originalText}
 
 译文：`;
 
@@ -2922,28 +2911,30 @@ const cleanedText = cleanTranslatedText(translatedText);
 // 添加到缓存 - 使用无标记的原文作为键
 addToCache(cacheKey, sourceLang, targetLang, cleanedText);
 
-// 按段落边界分割翻译结果 - 使用标记匹配
+// 按段落边界分割翻译结果
 let translatedLines;
 const expectedCount = group.paragraphs.length;
 
-// 首先尝试用段落标记[P1]、[P2]等分割
-const markedMatches = cleanedText.match(/\[P\d+\][^\[]*/g);
-if (markedMatches && markedMatches.length === expectedCount) {
-// 使用标记提取译文，移除标记
-translatedLines = markedMatches.map(m => m.replace(/^\[P\d+\]\s*/, ''));
-addLog(`  -> 使用段落标记提取: ${translatedLines.length}个段落`);
-} else {
-// 回退到原来的分割方式
+// 首先尝试双换行符分割
 const doubleNewlineSplit = cleanedText.split(/\n\n+/).map(line => line.trim()).filter(line => line);
 
-// 尝试不同的分割方式，找到最接近期望数量的结果
+// 如果双换行符分割的数量正确，直接使用
+if (doubleNewlineSplit.length === expectedCount) {
+translatedLines = doubleNewlineSplit;
+addLog(`  -> 使用双换行符分割: ${translatedLines.length}个段落`);
+} else {
+// 尝试单换行符分割
+const singleNewlineSplit = cleanedText.split(/\n/).map(line => line.trim()).filter(line => line.length > 0);
+if (singleNewlineSplit.length === expectedCount) {
+translatedLines = singleNewlineSplit;
+addLog(`  -> 使用单换行符分割: ${translatedLines.length}个段落`);
+} else {
+// 使用最接近期望数量的分割方式
 const splitOptions = [
 { lines: doubleNewlineSplit, name: '双换行符' },
-{ lines: cleanedText.split(/\n/).map(line => line.trim()).filter(line => line.length > 0), name: '单换行符' },
-{ lines: cleanedText.split(/[。！？]/).map(line => line.trim()).filter(line => line.length > 2), name: '句号分割' }
+{ lines: singleNewlineSplit, name: '单换行符' }
 ];
 
-// 找到最接近期望数量的分割方式
 let bestMatch = splitOptions[0];
 let minDiff = Math.abs(splitOptions[0].lines.length - expectedCount);
 
@@ -2958,6 +2949,10 @@ bestMatch = option;
 translatedLines = bestMatch.lines;
 addLog(`  -> 翻译结果: 期望${expectedCount}段，AI返回${translatedLines.length}段（使用${bestMatch.name}分割）`);
 }
+}
+
+// 清理可能残留的段落标记
+translatedLines = translatedLines.map(line => line.replace(/\[P\d+\]\s*/g, '').replace(/^\[P\d+\]/, ''));
 
 // 智能分配翻译结果到各个段落
 if (translatedLines.length === expectedCount) {
@@ -3810,16 +3805,9 @@ const cachedResult = getFromCache(cacheKey, sourceLang, targetLang);
 if (cachedResult) {
 // 使用缓存的翻译结果
 addLog('  -> 使用缓存的翻译结果');
-// 尝试从缓存中提取标记
-const markedMatches = cachedResult.match(/\[P\d+\][^\[]*/g);
-let translatedLines;
-if (markedMatches && markedMatches.length === group.paragraphs.length) {
-translatedLines = markedMatches.map(m => m.replace(/^\[P\d+\]\s*/, ''));
-addLog(`  -> 缓存使用段落标记提取: ${translatedLines.length}个段落`);
-} else {
-translatedLines = cachedResult.split(/\n\n+/).map(line => line.trim()).filter(line => line);
-addLog(`  -> 缓存使用双换行符分割: ${translatedLines.length}个段落`);
-}
+// 清理可能残留的段落标记
+const cleanedCached = cachedResult.replace(/\[P\d+\]\s*/g, '').replace(/^\[P\d+\]/g, '');
+const translatedLines = cleanedCached.split(/\n\n+/).map(line => line.trim()).filter(line => line);
 
 group.paragraphs.forEach((para, idx) => {
 if (idx < translatedLines.length) {
@@ -3839,24 +3827,20 @@ originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
 '翻译中...'
 );
 
-// 构建翻译提示词 - 要求保持段落结构
+// 构建翻译提示词 - 简化格式，不使用标记
 const paraCount = group.paragraphs.length;
 
-// 为每个段落添加序号标记，确保AI按正确顺序翻译
-const numberedText = group.paragraphs.map((p, i) =>
-`[P${i+1}] ${p.originalText}`
-).join('\n\n');
+const translatePrompt = `你是${langNames[sourceLang]}到${langNames[targetLang]}的翻译专家。
 
-const translatePrompt = `你是${langNames[sourceLang]}到${langNames[targetLang]}的翻译专家。请翻译以下文本。
+请翻译以下${paraCount}个段落，译文格式要求：
 
-【重要要求】
-1. 原文共${paraCount}个段落，每个段落用[P1]、[P2]...标记
-2. 译文必须保持相同的段落标记和顺序
-3. 每个段落的标记（如[P1]）必须保留在译文开头
-4. 只返回译文，不要有其他内容
+1. 每个段落翻译后空一行（输入两个回车）
+2. 必须返回恰好${paraCount}个翻译段落
+3. 只返回译文，不要有任何解释
+4. 专有名词可直接音译
 
 原文：
-${numberedText}
+${originalText}
 
 译文：`;
 
