@@ -90,6 +90,159 @@ const BLOCK_TAGS = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
 const _logQueue = [];
 let _logRafId = null;
 
+// ===== 翻译质量模式与术语表 =====
+
+// 获取当前翻译质量模式
+function getTranslationMode() {
+return document.querySelector('input[name="translationMode"]:checked')?.value || 'standard';
+}
+
+// 解析用户自定义术语表
+function parseGlossary() {
+const glossaryText = document.getElementById('customGlossary')?.value || '';
+if (!glossaryText.trim()) return null;
+const entries = [];
+for (const line of glossaryText.split('\n')) {
+const trimmed = line.trim();
+if (!trimmed || trimmed.startsWith('#')) continue;
+const sep = trimmed.indexOf('=');
+if (sep > 0) {
+const source = trimmed.substring(0, sep).trim();
+const target = trimmed.substring(sep + 1).trim();
+if (source && target) entries.push({ source, target });
+}
+}
+return entries.length > 0 ? entries : null;
+}
+
+// 构建术语表提示文本
+function buildGlossaryText(glossary) {
+if (!glossary || glossary.length === 0) return '';
+const lines = glossary.map(g => `  - ${g.source} → ${g.target}`).join('\n');
+return `\n术语表（请严格遵循以下翻译）：\n${lines}\n`;
+}
+
+// 构建批量翻译的 system prompt（根据质量模式）
+function buildBatchSystemPrompt(sourceLang, targetLang, mode) {
+const glossary = parseGlossary();
+const glossaryText = buildGlossaryText(glossary);
+const sourceName = LANG_NAMES[sourceLang];
+const targetName = LANG_NAMES[targetLang];
+
+if (mode === 'quick') {
+  return `你是${sourceName}到${targetName}的翻译专家。请准确翻译用户提供的文本。只返回译文，不要有任何解释。${glossaryText}`;
+}
+
+if (mode === 'refined') {
+  return `你是一位资深的${sourceName}到${targetName}翻译专家，同时也是出色的${targetName}作家。
+
+你的核心原则是「重写而非直译」——将内容用自然、地道、流畅的${targetName}重新表达，如同${targetName}母语作者撰写。
+
+翻译要求：
+1. 准确性：忠实传达原文的事实、逻辑和意图，不遗漏、不添加信息
+2. 地道表达：使用${targetName}的惯用语序、搭配和表达方式，避免翻译腔
+3. 风格一致：保持原文的语气、风格和文学性（如幽默、正式、口语化等）
+4. 术语处理：专业术语首次出现时可在括号内注明原文（如：强化学习(Reinforcement Learning)）
+5. 文化适配：必要时对文化背景、典故进行适当本地化处理
+6. 格式保持：严格保留原文的段落结构、HTML标签和格式标记
+${glossaryText}
+翻译后，请自我审校一遍：检查是否有漏译、误译、不通顺之处，确保译文自然流畅。`;
+}
+
+// standard mode (default)
+return `你是一位专业的${sourceName}到${targetName}翻译专家。
+
+核心原则：「重写而非直译」——产出自然地道的${targetName}文本，如同母语写作。
+
+翻译要求：
+1. 忠实传达原文含义，不遗漏、不添加
+2. 使用${targetName}惯用的语序和表达方式，避免翻译腔
+3. 保持原文的语气和风格
+4. 专有名词保留原文或音译
+5. 严格保留原文的段落结构和HTML标签
+${glossaryText}`;
+}
+
+// 构建单段重试的 system prompt
+function buildSingleRetrySystemPrompt(sourceLang, targetLang) {
+const glossary = parseGlossary();
+const glossaryText = buildGlossaryText(glossary);
+const sourceName = LANG_NAMES[sourceLang];
+const targetName = LANG_NAMES[targetLang];
+
+return `你是${sourceName}到${targetName}的翻译专家。核心原则：重写而非直译，产出自然地道的${targetName}文本。${glossaryText}`;
+}
+
+// 构建批量翻译的 user prompt
+function buildBatchUserPrompt(originalText, paraCount, mode) {
+if (mode === 'quick') {
+  return `翻译以下${paraCount}个段落，每段之间空一行，必须返回恰好${paraCount}个段落，只返回译文：
+
+${originalText}
+
+译文：`;
+}
+
+if (mode === 'refined') {
+  return `请翻译以下${paraCount}个段落。
+
+格式要求：
+1. 每个段落翻译后空一行（输入两个回车）
+2. 必须返回恰好${paraCount}个翻译段落
+3. 只返回译文，不要有任何解释或注释
+
+翻译步骤：
+- 先理解每段的核心含义和语境
+- 用目标语言重新表达，确保自然流畅
+- 审校检查：是否通顺、有无漏译
+
+原文：
+${originalText}
+
+译文：`;
+}
+
+// standard
+return `请翻译以下${paraCount}个段落，译文格式要求：
+
+1. 每个段落翻译后空一行（输入两个回车）
+2. 必须返回恰好${paraCount}个翻译段落
+3. 只返回译文，不要有任何解释
+4. 专有名词可保留原文或音译
+
+原文：
+${originalText}
+
+译文：`;
+}
+
+// 构建单段重试的 user prompt
+function buildSingleRetryUserPrompt(originalText, sourceLang, targetLang) {
+return `请将以下${LANG_NAMES[sourceLang]}文本翻译成${LANG_NAMES[targetLang]}。
+
+原文：
+${originalText}
+
+要求：
+1. 准确翻译所有内容，包括任何英文单词、数字、专有名词
+2. 用自然地道的${LANG_NAMES[targetLang]}重新表达，避免翻译腔
+3. 只返回翻译结果，不要添加任何解释、前言或后记
+4. 绝对禁止添加"Excerpt From"、版权声明、元数据等任何内容`;
+}
+
+// 更新翻译模式描述文本
+function updateModeDescription() {
+const mode = getTranslationMode();
+const desc = document.getElementById('modeDescription');
+if (!desc) return;
+const descriptions = {
+  'quick': '快速模式：直接翻译，不做额外分析，速度最快，适合对质量要求不高的场景。',
+  'standard': '标准模式：采用「重写而非直译」策略，产出自然地道的目标语言文本。',
+  'refined': '精翻模式：翻译后自动审校，检查漏译、误译和不通顺之处，质量最高但速度较慢。'
+};
+desc.textContent = descriptions[mode] || descriptions['standard'];
+}
+
 // ===== 性能优化全局常量结束 =====
 
 // Multi-file handling
@@ -349,7 +502,9 @@ zhipuBaseUrl: document.getElementById('zhipuBaseUrl')?.value || 'https://open.bi
 openrouterApiKey: document.getElementById('openrouterApiKey')?.value || '',
 openrouterModel: document.getElementById('openrouterModel')?.value || 'deepseek/deepseek-chat',
 customEndpoint: document.getElementById('apiEndpoint')?.value || '',
-customApiKey: document.getElementById('apiKey')?.value || ''
+customApiKey: document.getElementById('apiKey')?.value || '',
+translationMode: getTranslationMode(),
+customGlossary: document.getElementById('customGlossary')?.value || ''
 };
 localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
 }
@@ -406,6 +561,21 @@ if (endpointInput) endpointInput.value = config.customEndpoint;
 if (config.customApiKey) {
 const apiKeyInput = document.getElementById('apiKey');
 if (apiKeyInput) apiKeyInput.value = config.customApiKey;
+}
+
+// 恢复翻译质量模式
+if (config.translationMode) {
+const modeRadio = document.querySelector(`input[name="translationMode"][value="${config.translationMode}"]`);
+if (modeRadio) {
+modeRadio.checked = true;
+updateModeDescription();
+}
+}
+
+// 恢复术语表
+if (config.customGlossary) {
+const glossaryInput = document.getElementById('customGlossary');
+if (glossaryInput) glossaryInput.value = config.customGlossary;
 }
 
 addLog('已恢复上次的配置');
@@ -535,6 +705,18 @@ if (openrouterKeyInput) openrouterKeyInput.addEventListener('input', saveConfig)
 if (openrouterModelInput2) openrouterModelInput2.addEventListener('change', saveConfig);
 if (customEndpointInput) customEndpointInput.addEventListener('input', saveConfig);
 if (customApiKeyInput) customApiKeyInput.addEventListener('input', saveConfig);
+
+// 监听翻译质量模式变化
+document.querySelectorAll('input[name="translationMode"]').forEach(radio => {
+    radio.addEventListener('change', function() {
+        updateModeDescription();
+        saveConfig();
+    });
+});
+
+// 监听术语表变化
+const glossaryInput = document.getElementById('customGlossary');
+if (glossaryInput) glossaryInput.addEventListener('input', saveConfig);
 });
 // Event Listeners will be initialized after DOMContentLoaded
 
@@ -1947,6 +2129,10 @@ translationStartTime = Date.now();
 translationEndTime = null;
 startTimeUpdate(); // 启动实时时长更新
 
+const modeNames = { quick: '快速', standard: '标准', refined: '精翻' };
+addLog(`📋 翻译质量模式：${modeNames[getTranslationMode()] || '标准'}`);
+const glossary = parseGlossary();
+if (glossary) addLog(`📖 已加载 ${glossary.length} 条自定义术语`);
 addLog(`准备批量翻译 ${files.length} 个文件...`);
 // 调用批量处理，传递语言参数和服务类型
 await processMultipleFiles(files, sourceLang, targetLang, service);
@@ -1994,6 +2180,10 @@ if (originalTextDiv) originalTextDiv.textContent = '准备中...';
 if (translatedTextDiv) translatedTextDiv.textContent = '准备中...';
 
 // 记录翻译信息
+const modeNamesSingle = { quick: '快速', standard: '标准', refined: '精翻' };
+addLog(`📋 翻译质量模式：${modeNamesSingle[getTranslationMode()] || '标准'}`);
+const glossarySingle = parseGlossary();
+if (glossarySingle) addLog(`📖 已加载 ${glossarySingle.length} 条自定义术语`);
 addLog(`开始翻译: ${sourceLang} -> ${targetLang}`);
 
 try {
@@ -2739,26 +2929,18 @@ originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
 '翻译中...'
 );
 
-// 构建翻译提示词 - 简化格式，不使用标记
+// 构建翻译提示词 - 使用质量模式感知的prompt构建器
 const paraCount = group.paragraphs.length;
-
-const translatePrompt = `你是${LANG_NAMES[sourceLang]}到${LANG_NAMES[targetLang]}的翻译专家。
-
-请翻译以下${paraCount}个段落，译文格式要求：
-
-1. 每个段落翻译后空一行（输入两个回车）
-2. 必须返回恰好${paraCount}个翻译段落
-3. 只返回译文，不要有任何解释
-4. 专有名词可直接音译
-
-原文：
-${originalText}
-
-译文：`;
+const translationMode = getTranslationMode();
+const systemPrompt = buildBatchSystemPrompt(sourceLang, targetLang, translationMode);
+const userPrompt = buildBatchUserPrompt(originalText, paraCount, translationMode);
 
 // 添加超时控制
 const controller = new AbortController();
 const timeoutId = setTimeout(() => controller.abort(), 120000); // 120秒超时
+
+// 精翻模式使用稍高温度以获得更自然的表达
+const temperature = translationMode === 'refined' ? 0.4 : 0.3;
 
 const response = await fetch(`${baseUrl}chat/completions`, {
 method: 'POST',
@@ -2770,11 +2952,15 @@ body: JSON.stringify({
 model: 'glm-4-flash',
 messages: [
 {
+role: 'system',
+content: systemPrompt
+},
+{
 role: 'user',
-content: translatePrompt
+content: userPrompt
 }
 ],
-temperature: 0.3,
+temperature: temperature,
 max_tokens: 8000
 }),
 signal: controller.signal
@@ -2993,17 +3179,9 @@ retryCount++;
 addLog(`  [${retryCount}/${untranslatedParagraphs.length}] 重试段落 ${para.index}: "${para.originalText.substring(0, 50)}..."`);
 
 try {
-// 构建单段落翻译提示词
-const singleTranslatePrompt = `请将以下${LANG_NAMES[sourceLang]}文本翻译成${LANG_NAMES[targetLang]}。
-
-原文：
-${para.originalText}
-
-要求：
-1. 准确翻译所有内容，包括任何英文单词、数字、专有名词
-2. 保持原文的语气和风格
-3. 只返回翻译结果，不要添加任何解释、前言或后记
-4. 绝对禁止添加"Excerpt From"、版权声明、元数据等任何内容`;
+// 构建单段落翻译提示词 - 使用增强prompt
+const singleSystemPrompt = buildSingleRetrySystemPrompt(sourceLang, targetLang);
+const singleUserPrompt = buildSingleRetryUserPrompt(para.originalText, sourceLang, targetLang);
 
 // 添加超时控制
 const controller = new AbortController();
@@ -3017,10 +3195,16 @@ headers: {
 },
 body: JSON.stringify({
 model: 'glm-4-flash',
-messages: [{
+messages: [
+{
+role: 'system',
+content: singleSystemPrompt
+},
+{
 role: 'user',
-content: singleTranslatePrompt
-}],
+content: singleUserPrompt
+}
+],
 temperature: 0.3,
 max_tokens: 2000
 }),
@@ -3616,26 +3800,18 @@ originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
 '翻译中...'
 );
 
-// 构建翻译提示词 - 简化格式，不使用标记
+// 构建翻译提示词 - 使用质量模式感知的prompt构建器
 const paraCount = group.paragraphs.length;
-
-const translatePrompt = `你是${LANG_NAMES[sourceLang]}到${LANG_NAMES[targetLang]}的翻译专家。
-
-请翻译以下${paraCount}个段落，译文格式要求：
-
-1. 每个段落翻译后空一行（输入两个回车）
-2. 必须返回恰好${paraCount}个翻译段落
-3. 只返回译文，不要有任何解释
-4. 专有名词可直接音译
-
-原文：
-${originalText}
-
-译文：`;
+const translationMode = getTranslationMode();
+const systemPrompt = buildBatchSystemPrompt(sourceLang, targetLang, translationMode);
+const userPrompt = buildBatchUserPrompt(originalText, paraCount, translationMode);
 
 // 添加超时控制
 const controller = new AbortController();
 const timeoutId = setTimeout(() => controller.abort(), 120000); // 120秒超时
+
+// 精翻模式使用稍高温度以获得更自然的表达
+const temperature = translationMode === 'refined' ? 0.4 : 0.3;
 
 const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
 method: 'POST',
@@ -3649,11 +3825,15 @@ body: JSON.stringify({
 model: model,
 messages: [
 {
+role: 'system',
+content: systemPrompt
+},
+{
 role: 'user',
-content: translatePrompt
+content: userPrompt
 }
 ],
-temperature: 0.3,
+temperature: temperature,
 max_tokens: 8000
 }),
 signal: controller.signal
@@ -3814,17 +3994,9 @@ retryCount++;
 addLog(`  [${retryCount}/${untranslatedParagraphs.length}] 重试段落 ${para.index}: "${para.originalText.substring(0, 50)}..."`);
 
 try {
-// 构建单段落翻译提示词
-const singleTranslatePrompt = `请将以下${LANG_NAMES[sourceLang]}文本翻译成${LANG_NAMES[targetLang]}。
-
-原文：
-${para.originalText}
-
-要求：
-1. 准确翻译所有内容，包括任何英文单词、数字、专有名词
-2. 保持原文的语气和风格
-3. 只返回翻译结果，不要添加任何解释、前言或后记
-4. 绝对禁止添加"Excerpt From"、版权声明、元数据等任何内容`;
+// 构建单段落翻译提示词 - 使用增强prompt
+const singleSystemPrompt = buildSingleRetrySystemPrompt(sourceLang, targetLang);
+const singleUserPrompt = buildSingleRetryUserPrompt(para.originalText, sourceLang, targetLang);
 
 // 添加超时控制
 const controller = new AbortController();
@@ -3840,10 +4012,16 @@ headers: {
 },
 body: JSON.stringify({
 model: model,
-messages: [{
+messages: [
+{
+role: 'system',
+content: singleSystemPrompt
+},
+{
 role: 'user',
-content: singleTranslatePrompt
-}],
+content: singleUserPrompt
+}
+],
 temperature: 0.3,
 max_tokens: 2000
 }),
