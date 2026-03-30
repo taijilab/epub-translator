@@ -1,62 +1,92 @@
 # EPUB 多语言翻译工具
 
-一个功能强大的EPUB文件翻译工具，支持批量翻译、语言检测、格式保持等功能。
+一个功能强大的客户端 EPUB 文件翻译工具，支持批量翻译、多种翻译质量模式、术语表、智能并发，完全在浏览器中运行，无需后端服务器。
 
 ## ✨ 主要功能
 
 - 🌍 **多语言支持** - 支持中文、英语、日语、韩语、法语、西班牙语、德语、俄语、葡萄牙语之间的互译
 - 📊 **智能文件分析** - 自动检测文件字数、语言类型
-- ⚡ **高速翻译** - 智能并发处理，翻译速度快
+- ⚡ **高速翻译** - 30 路并发 API 请求 + 8 文件并行处理，智能分组减少调用次数
+- 🎯 **三种翻译模式** - 快速模式、标准模式、精翻模式，按需选择质量与速度的平衡
+- 📖 **术语表支持** - 自定义术语表确保专业术语翻译一致性
 - 📈 **实时进度** - 按字数显示翻译进度，实时反馈
-- 🔄 **横竖排转换** - 自动检测竖排EPUB并转换为横排，支持多种属性格式
-- 📖 **保持原文排版** - 完整保留原文的段落结构、HTML标签和CSS样式
+- 🔄 **横竖排转换** - 自动检测竖排 EPUB 并转换为横排
+- 📖 **保持原文排版** - 完整保留原文的段落结构、HTML 标签和 CSS 样式
 - 👁️ **翻译预览** - 翻译完成后可在线预览效果
 - 💾 **原文件保护** - 原文件完全不被修改，生成新文件
-- 📝 **Token统计** - 实时显示token消耗和预估费用
+- 📝 **Token 统计** - 实时显示 token 消耗和预估费用
+- 🗂️ **批量处理** - 支持同时上传和翻译多个 EPUB 文件
 
 ## 🚀 使用方法
 
 ### 在线使用
 
 1. 打开 `index.html` 文件
-2. 上传EPUB文件
+2. 上传 EPUB 文件（支持拖拽，支持多文件）
 3. 选择源语言和目标语言
-4. 配置API服务（支持OpenRouter、智谱AI等）
-5. 点击"开始翻译"
-6. 预览翻译结果
-7. 下载翻译后的EPUB文件
+4. 配置 API 服务（支持 OpenRouter、智谱 AI、自定义 API）
+5. 选择翻译模式（快速 / 标准 / 精翻）
+6. （可选）配置术语表
+7. 点击"开始翻译"
+8. 预览翻译结果并下载
 
 ### 本地运行
 
 ```bash
-# 使用任意HTTP服务器
+# Python（最简单）
 python -m http.server 8000
-# 或
-npx serve
+
+# Node.js
+npx serve .
 ```
 
 然后访问 http://localhost:8000
 
-## 🔑 API配置
+也可以直接在浏览器中打开 `index.html`（`file://` 协议可用）。
+
+## 🔑 API 配置
 
 ### OpenRouter（推荐）
 
-1. 访问 [OpenRouter](https://openrouter.ai/keys) 获取API Key
+1. 访问 [OpenRouter](https://openrouter.ai/keys) 获取 API Key
 2. 选择服务：OpenRouter
-3. 输入API Key
-4. 选择模型（推荐DeepSeek Chat）
+3. 输入 API Key
+4. 选择模型（推荐 DeepSeek Chat）
 
-### 智谱AI
+### 智谱 AI
 
-1. 访问 [智谱AI开放平台](https://open.bigmodel.cn/) 获取API Key
-2. 选择服务：智谱AI
-3. 输入API Key和API地址
+1. 访问 [智谱 AI 开放平台](https://open.bigmodel.cn/) 获取 API Key
+2. 选择服务：智谱 AI
+3. 输入 API Key 和 API 地址
 
-## 📁 文件说明
+### 自定义 API
 
-- `index.html` - 主程序文件（包含所有功能）
-- `.gitignore` - Git忽略文件配置
-- `README.md` - 项目说明文档
+支持任何 OpenAI 兼容的 chat completions 端点，填入端点地址和 API Key 即可。
+
+### Demo 模式
+
+无需 API Key，用于测试 UI 流程和功能验证。
+
+## 🎯 翻译质量模式
+
+### 快速模式
+直接翻译，速度最快，适合快速浏览内容。
+
+### 标准模式（默认）
+先分析原文风格和术语，再进行翻译。兼顾质量和速度。
+
+### 精翻模式
+完整翻译工作流：分析 → 初译 → 审校 → 润色。适合出版级质量要求。
+
+核心翻译理念借鉴 [baoyu-translate](https://github.com/JimLiu/baoyu-skills) 技能：**重写而非逐字翻译**，产出如同目标语言母语作者撰写的自然流畅文本。
+
+## 📖 术语表
+
+支持自定义术语表，确保专有名词、技术术语在全书中翻译一致：
+
+- 在翻译设置中添加术语对（原文 → 译文）
+- 术语表会自动注入翻译 prompt
+- 适用于人名、地名、技术概念等需要统一翻译的场景
 
 ## 🎯 支持的语言
 
@@ -72,52 +102,69 @@ npx serve
 
 ## 💡 特色功能
 
-### 1. 智能语言检测
+### 智能语言检测
 上传文件后自动检测主要语言并自动选择源语言。
 
-### 2. 竖排转横排
-自动检测竖排EPUB（日文漫画等）并转换为横排，翻译后阅读更舒适。
-- 支持多种CSS属性格式（双引号、单引号、无引号）
+### 竖排转横排
+自动检测竖排 EPUB（日文漫画、轻小说等）并转换为横排：
 - 转换 `writing-mode: vertical-rl` → `horizontal-tb`
 - 转换 `direction: rtl` → `ltr`
-- 转换 `page-progression-direction: rtl` → `ltr`
-- 转换 `page-spread-direction: rtl` → `ltr`
-- 转换 `rendition:orientation="vertical"` → `"auto"`
-- 转换 `rendition:spread="right/left"` → `"auto"`
-- 完整修正页码顺序（从左到右）
+- 修正页面进度方向和页码顺序
 
-### 3. 保持原文排版
-- ✅ 每个文本节点单独翻译，不合并段落
-- ✅ 完整保留原文HTML结构和标签
-- ✅ 保留段落层级和CSS样式类
-- ✅ 保留标点符号和特殊格式
-- ✅ 保持原文的语气和风格
-- ✅ 专有名词（人名、地名）翻译保持一致
+### 保持原文排版
+- 每个文本节点单独翻译，不合并段落
+- 完整保留原文 HTML 结构和标签
+- 保留 CSS 样式、段落层级和特殊格式
+- 保留 DOCTYPE 和 XHTML 命名空间
 
-### 4. 格式保持
-- 保留原始XHTML结构
-- 保留自闭合标签
-- 保留DOCTYPE和命名空间
-- 保留CSS样式
+### 实时 Token 统计
+显示输入 / 输出 / 总 Token 数量，并预估费用。
 
-### 5. 实时Token统计
-显示输入/输出/总Token数量，并预估费用。
-
-### 6. 翻译预览
+### 翻译预览
 翻译完成后可在网页中直接预览翻译效果，确认无误后再下载。
+
+## ⚡ 性能优化
+
+| 参数 | 值 | 说明 |
+|------|------|------|
+| API 并发请求 | 30 | 信号量控制最大并发 |
+| HTML 文件并行 | 8 | 同时处理多个章节文件 |
+| 段落分组 | 500-800 字/组 | 减少 API 调用次数 |
+| 每组最大段落数 | 12 | 平衡分组大小 |
+| 重试策略 | 指数退避 500→1000→2000ms | 自动处理限流 |
+| 未翻译重试 | 并行（10 路并发） | 快速补翻遗漏段落 |
+| 翻译缓存 | FNV-1a 哈希，1000 条 | 避免重复翻译 |
+| 批次间延迟 | 0ms | 无额外等待 |
+
+## 📁 项目结构
+
+```
+epub-translator/
+├── index.html              # 主 UI（单 HTML 文件）
+├── js/
+│   └── app.js              # 所有应用逻辑
+├── css/
+│   ├── styles.css           # 自定义样式
+│   ├── tailwind-cdn.css     # Tailwind CDN
+│   └── tailwind-compiled.css
+├── tailwind.config.js       # Tailwind 配置
+├── package.json             # 开发依赖
+├── PERFORMANCE.md           # 性能优化说明
+└── README.md                # 本文档
+```
 
 ## 📋 系统要求
 
 - 现代浏览器（Chrome、Firefox、Safari、Edge）
 - 稳定的网络连接
-- API服务的有效密钥
+- API 服务的有效密钥
 
 ## 🛠️ 技术栈
 
-- 纯HTML + JavaScript
-- Tailwind CSS（样式）
-- JSZip（EPUB文件处理）
-- OpenAI兼容API
+- 纯 HTML + JavaScript（ES6+，无框架）
+- Tailwind CSS v4（CDN）
+- JSZip v3.10.1（EPUB 文件处理）
+- OpenAI 兼容 API
 
 ## 📄 开源协议
 
@@ -125,8 +172,8 @@ MIT License
 
 ## 🤝 贡献
 
-欢迎提交Issue和Pull Request！
+欢迎提交 Issue 和 Pull Request！
 
 ---
 
-**享受您的EPUB翻译之旅！** 📚✨
+**享受您的 EPUB 翻译之旅！** 📚✨
