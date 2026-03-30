@@ -25,11 +25,19 @@ return func.apply(this, args);
 };
 }
 
+// FNV-1a 哈希：快速、低碰撞
+function fnv1aHash(str) {
+let hash = 0x811c9dc5; // FNV offset basis
+for (let i = 0; i < str.length; i++) {
+hash ^= str.charCodeAt(i);
+hash = (hash * 0x01000193) >>> 0; // FNV prime, keep as uint32
+}
+return hash.toString(36);
+}
+
 // 缓存键生成函数
 function getCacheKey(text, sourceLang, targetLang) {
-// 简单哈希：使用文本的前100字符 + 长度 + 语言对
-const prefix = text.substring(0, 100);
-return `${sourceLang}-${targetLang}-${prefix.length}-${text.length}-${prefix.substring(0, 20)}`;
+return `${sourceLang}-${targetLang}-${text.length}-${fnv1aHash(text)}`;
 }
 
 // 添加到缓存
@@ -2800,9 +2808,9 @@ addLog(`  -> 返回内容: 文本${resultTextLength}字, HTML${resultHtmlLength}
 return result;
 }
 
-// 智能合并：每300-500字一组，减少单次翻译的段落数，提高完整性
-const TARGET_MIN_LENGTH = 300;
-const TARGET_MAX_LENGTH = 500;
+// 智能合并：每500-800字一组，减少API调用次数，提高翻译吞吐量
+const TARGET_MIN_LENGTH = 500;
+const TARGET_MAX_LENGTH = 800;
 const groupedParagraphs = [];
 let currentBatch = [];
 let currentLength = 0;
@@ -2811,7 +2819,7 @@ for (let i = 0; i < paragraphs.length; i++) {
 const para = paragraphs[i];
 const textLength = para.originalText.length;
 
-// 如果单个段落就超过800字，单独处理
+// 如果单个段落就超过上限，单独处理
 if (textLength > TARGET_MAX_LENGTH) {
 // 先保存之前累积的
 if (currentBatch.length > 0) {
@@ -2835,7 +2843,7 @@ currentBatch.push(para);
 currentLength += textLength;
 
 // 如果达到目标长度或批次够多，保存
-if (currentLength >= TARGET_MIN_LENGTH || currentBatch.length >= 8) {
+if (currentLength >= TARGET_MIN_LENGTH || currentBatch.length >= 12) {
 groupedParagraphs.push({
 paragraphs: currentBatch,
 combinedText: currentBatch.map(p => p.originalText).join('\n\n'),
@@ -3163,29 +3171,26 @@ addLog(`  ${idx + 1}. [${p.originalText.length}字] "${preview}"${reason}`);
 });
 }
 
-// ========== 自动重试未翻译的段落 ==========
+// ========== 自动重试未翻译的段落（并行） ==========
 const untranslatedParagraphs = paragraphs.filter(p => !p.translatedText || p.translatedText === p.originalText);
 if (untranslatedParagraphs.length > 0) {
 addLog(``);
-addLog(`🔄 开始自动重试 ${untranslatedParagraphs.length} 个未翻译的段落...`);
+addLog(`🔄 开始并行重试 ${untranslatedParagraphs.length} 个未翻译的段落...`);
 
-let retryCount = 0;
-const maxRetries = untranslatedParagraphs.length; // 每个段落最多重试一次
+const retrySemaphore = createSemaphore(10); // 重试并发上限10
+let retrySuccessCount = 0;
 
-for (let i = 0; i < untranslatedParagraphs.length && i < maxRetries; i++) {
-const para = untranslatedParagraphs[i];
-if (!para.translatedText || para.translatedText === para.originalText) {
-retryCount++;
-addLog(`  [${retryCount}/${untranslatedParagraphs.length}] 重试段落 ${para.index}: "${para.originalText.substring(0, 50)}..."`);
+const retryPromises = untranslatedParagraphs.map((para, idx) => {
+return retrySemaphore(async () => {
+if (shouldCancel) return;
+addLog(`  [${idx + 1}/${untranslatedParagraphs.length}] 重试段落 ${para.index}: "${para.originalText.substring(0, 50)}..."`);
 
 try {
-// 构建单段落翻译提示词 - 使用增强prompt
 const singleSystemPrompt = buildSingleRetrySystemPrompt(sourceLang, targetLang);
 const singleUserPrompt = buildSingleRetryUserPrompt(para.originalText, sourceLang, targetLang);
 
-// 添加超时控制
 const controller = new AbortController();
-const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
+const timeoutId = setTimeout(() => controller.abort(), 60000);
 
 const response = await fetch(`${baseUrl}chat/completions`, {
 method: 'POST',
@@ -3196,14 +3201,8 @@ headers: {
 body: JSON.stringify({
 model: 'glm-4-flash',
 messages: [
-{
-role: 'system',
-content: singleSystemPrompt
-},
-{
-role: 'user',
-content: singleUserPrompt
-}
+{ role: 'system', content: singleSystemPrompt },
+{ role: 'user', content: singleUserPrompt }
 ],
 temperature: 0.3,
 max_tokens: 2000
@@ -3222,25 +3221,24 @@ const data = await response.json();
 const translatedText = data.choices[0]?.message?.content?.trim();
 
 if (translatedText) {
-// 清理AI回复中的提示词残留
 const cleanedText = cleanTranslatedText(translatedText);
 para.translatedText = cleanedText;
 para.skipReason = null;
-translatedCount++;
+retrySuccessCount++;
 addLog(`    ✓ 段落 ${para.index} 翻译成功`);
 } else {
 addLog(`    ⚠️ 段落 ${para.index} 翻译失败：API返回空响应`, true);
 }
-
 } catch (error) {
 addLog(`    ⚠️ 段落 ${para.index} 翻译失败：${error.message}`, true);
-// 失败的段落保持原文
 para.translatedText = para.originalText;
 }
-}
-}
+});
+});
 
-addLog(`🔄 重试完成：额外翻译了 ${retryCount} 个段落`);
+await Promise.all(retryPromises);
+translatedCount += retrySuccessCount;
+addLog(`🔄 重试完成：额外翻译了 ${retrySuccessCount} 个段落`);
 }
 
 // 检查是否有原文残留（在翻译后的HTML中搜索原文特征）
@@ -3671,9 +3669,9 @@ addLog(`  -> 返回内容: 文本${resultTextLength}字, HTML${resultHtmlLength}
 return result;
 }
 
-// 智能合并：每300-500字一组，减少单次翻译的段落数，提高完整性
-const TARGET_MIN_LENGTH = 300;
-const TARGET_MAX_LENGTH = 500;
+// 智能合并：每500-800字一组，减少API调用次数，提高翻译吞吐量
+const TARGET_MIN_LENGTH = 500;
+const TARGET_MAX_LENGTH = 800;
 const groupedParagraphs = [];
 let currentBatch = [];
 let currentLength = 0;
@@ -3682,7 +3680,7 @@ for (let i = 0; i < paragraphs.length; i++) {
 const para = paragraphs[i];
 const textLength = para.originalText.length;
 
-// 如果单个段落就超过800字，单独处理
+// 如果单个段落就超过上限，单独处理
 if (textLength > TARGET_MAX_LENGTH) {
 // 先保存之前累积的
 if (currentBatch.length > 0) {
@@ -3706,7 +3704,7 @@ currentBatch.push(para);
 currentLength += textLength;
 
 // 如果达到目标长度或批次够多，保存
-if (currentLength >= TARGET_MIN_LENGTH || currentBatch.length >= 8) {
+if (currentLength >= TARGET_MIN_LENGTH || currentBatch.length >= 12) {
 groupedParagraphs.push({
 paragraphs: currentBatch,
 combinedText: currentBatch.map(p => p.originalText).join('\n\n'),
@@ -3975,29 +3973,26 @@ addLog(`  ${idx + 1}. [${p.originalText.length}字] "${preview}"${reason}`);
 });
 }
 
-// ========== 自动重试未翻译的段落 ==========
+// ========== 自动重试未翻译的段落（并行） ==========
 const untranslatedParagraphs = paragraphs.filter(p => !p.translatedText || p.translatedText === p.originalText);
 if (untranslatedParagraphs.length > 0) {
 addLog(``);
-addLog(`🔄 开始自动重试 ${untranslatedParagraphs.length} 个未翻译的段落...`);
+addLog(`🔄 开始并行重试 ${untranslatedParagraphs.length} 个未翻译的段落...`);
 
-let retryCount = 0;
-const maxRetries = untranslatedParagraphs.length; // 每个段落最多重试一次
+const retrySemaphore = createSemaphore(10); // 重试并发上限10
+let retrySuccessCount = 0;
 
-for (let i = 0; i < untranslatedParagraphs.length && i < maxRetries; i++) {
-const para = untranslatedParagraphs[i];
-if (!para.translatedText || para.translatedText === para.originalText) {
-retryCount++;
-addLog(`  [${retryCount}/${untranslatedParagraphs.length}] 重试段落 ${para.index}: "${para.originalText.substring(0, 50)}..."`);
+const retryPromises = untranslatedParagraphs.map((para, idx) => {
+return retrySemaphore(async () => {
+if (shouldCancel) return;
+addLog(`  [${idx + 1}/${untranslatedParagraphs.length}] 重试段落 ${para.index}: "${para.originalText.substring(0, 50)}..."`);
 
 try {
-// 构建单段落翻译提示词 - 使用增强prompt
 const singleSystemPrompt = buildSingleRetrySystemPrompt(sourceLang, targetLang);
 const singleUserPrompt = buildSingleRetryUserPrompt(para.originalText, sourceLang, targetLang);
 
-// 添加超时控制
 const controller = new AbortController();
-const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
+const timeoutId = setTimeout(() => controller.abort(), 60000);
 
 const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
 method: 'POST',
@@ -4010,14 +4005,8 @@ headers: {
 body: JSON.stringify({
 model: model,
 messages: [
-{
-role: 'system',
-content: singleSystemPrompt
-},
-{
-role: 'user',
-content: singleUserPrompt
-}
+{ role: 'system', content: singleSystemPrompt },
+{ role: 'user', content: singleUserPrompt }
 ],
 temperature: 0.3,
 max_tokens: 2000
@@ -4028,7 +4017,6 @@ signal: controller.signal
 clearTimeout(timeoutId);
 
 if (!response.ok) {
-// 专门处理401认证错误
 if (response.status === 401) {
 throw new Error('OpenRouter API Key 无效或已过期，请检查您的API Key设置');
 }
@@ -4040,25 +4028,24 @@ const data = await response.json();
 const translatedText = data.choices[0]?.message?.content?.trim();
 
 if (translatedText) {
-// 清理AI回复中的提示词残留
 const cleanedText = cleanTranslatedText(translatedText);
 para.translatedText = cleanedText;
 para.skipReason = null;
-translatedCount++;
+retrySuccessCount++;
 addLog(`    ✓ 段落 ${para.index} 翻译成功`);
 } else {
 addLog(`    ⚠️ 段落 ${para.index} 翻译失败：API返回空响应`, true);
 }
-
 } catch (error) {
 addLog(`    ⚠️ 段落 ${para.index} 翻译失败：${error.message}`, true);
-// 失败的段落保持原文
 para.translatedText = para.originalText;
 }
-}
-}
+});
+});
 
-addLog(`🔄 重试完成：额外翻译了 ${retryCount} 个段落`);
+await Promise.all(retryPromises);
+translatedCount += retrySuccessCount;
+addLog(`🔄 重试完成：额外翻译了 ${retrySuccessCount} 个段落`);
 }
 
 // 检查是否有原文残留（在翻译后的HTML中搜索原文特征）
