@@ -1764,13 +1764,13 @@ return `${minutes}分${remainingSeconds}秒`;
 }
 }
 
-// 更新token显示（带节流优化）
+// 更新token显示（带节流优化，force=true 时跳过节流）
 let lastTokenUpdateTime = 0;
 const TOKEN_UPDATE_THROTTLE = 200; // 200ms节流
 
-function updateTokenDisplay() {
+function updateTokenDisplay(force) {
 const now = Date.now();
-if (now - lastTokenUpdateTime < TOKEN_UPDATE_THROTTLE) {
+if (!force && now - lastTokenUpdateTime < TOKEN_UPDATE_THROTTLE) {
 return; // 跳过过于频繁的更新
 }
 lastTokenUpdateTime = now;
@@ -1786,30 +1786,47 @@ const total = totalInputTokens + totalOutputTokens;
 const estimatedCost = (total / 1000000 * 0.14).toFixed(4);
 document.getElementById('estimatedCost').textContent = `$${estimatedCost}`;
 
-// 更新翻译进度（显示已翻译的原文字数）
-// 在批量模式下，显示当前文件的进度；在单文件模式下，显示累积进度
+// 计算已翻译字数和进度
+let currentTranslated = 0;
+let currentTotal = totalCharsToTranslate;
+
 if (isBatchMode && totalCharsToTranslate > 0) {
-// 批量模式：只显示当前文件的进度
+currentTranslated = translatedChars;
+const progress = Math.round((translatedChars / totalCharsToTranslate) * 100);
 const progressElement = document.getElementById('translationProgress');
 if (progressElement) {
-const progress = Math.round((translatedChars / totalCharsToTranslate) * 100);
 progressElement.textContent =
 `${translatedChars.toLocaleString()} / ${totalCharsToTranslate.toLocaleString()} 字 (${progress}%)`;
 }
 } else if (totalCharsToTranslate > 0) {
-// 单文件模式：显示累积进度
+currentTranslated = totalSourceChars;
 document.getElementById('translationProgress').textContent =
 `${totalSourceChars.toLocaleString()} / ${totalCharsToTranslate.toLocaleString()} 字`;
 }
 
 // 更新翻译时长
+let elapsedSeconds = 0;
 if (translationStartTime && isTranslating) {
-const elapsed = (Date.now() - translationStartTime) / 1000;
-document.getElementById('translationTime').textContent = formatDuration(elapsed);
+elapsedSeconds = (Date.now() - translationStartTime) / 1000;
+document.getElementById('translationTime').textContent = formatDuration(elapsedSeconds);
 } else if (translationStartTime && !isTranslating) {
-// 翻译结束，显示最终时长
-const elapsed = (translationEndTime - translationStartTime) / 1000;
-document.getElementById('translationTime').textContent = formatDuration(elapsed);
+elapsedSeconds = (translationEndTime - translationStartTime) / 1000;
+document.getElementById('translationTime').textContent = formatDuration(elapsedSeconds);
+}
+
+// 预估剩余时间
+const remainingEl = document.getElementById('estimatedRemaining');
+if (remainingEl) {
+if (isTranslating && currentTranslated > 0 && currentTotal > 0 && elapsedSeconds > 3) {
+const charsPerSecond = currentTranslated / elapsedSeconds;
+const remainingChars = currentTotal - currentTranslated;
+const remainingSeconds = remainingChars / charsPerSecond;
+remainingEl.textContent = remainingSeconds < 1 ? '即将完成' : formatDuration(remainingSeconds);
+} else if (!isTranslating && translationStartTime) {
+remainingEl.textContent = '已完成';
+} else {
+remainingEl.textContent = '计算中...';
+}
 }
 }
 
@@ -1819,7 +1836,9 @@ totalInputTokens = 0;
 totalOutputTokens = 0;
 totalSourceChars = 0;
 totalTranslatedChars = 0;
-updateTokenDisplay();
+const remainingEl = document.getElementById('estimatedRemaining');
+if (remainingEl) remainingEl.textContent = '--';
+updateTokenDisplay(true);
 }
 
 // 启动实时时长更新
@@ -1832,16 +1851,12 @@ clearInterval(timeUpdateInterval);
 // 立即更新一次
 updateTokenDisplay();
 
-// 每100毫秒更新一次时长显示
+// 每500毫秒更新一次时长和剩余时间
 timeUpdateInterval = setInterval(() => {
 if (translationStartTime && isTranslating) {
-const elapsed = (Date.now() - translationStartTime) / 1000;
-const timeElement = document.getElementById('translationTime');
-if (timeElement) {
-timeElement.textContent = formatDuration(elapsed);
+updateTokenDisplay(true);
 }
-}
-}, 100);
+}, 500);
 }
 
 // 停止实时时长更新
@@ -1850,6 +1865,9 @@ if (timeUpdateInterval) {
 clearInterval(timeUpdateInterval);
 timeUpdateInterval = null;
 }
+
+// 强制刷新所有统计（含token、进度、剩余时间）
+updateTokenDisplay(true);
 
 // 更新最终时长
 if (translationStartTime && translationEndTime) {
@@ -3890,9 +3908,11 @@ originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
 translatedText.substring(0, 200) + (translatedText.length > 200 ? '...' : '')
 );
 
-// 统计token消耗（用于费用估算）
-const inputTokens = estimateTokens(translatePrompt);
-const outputTokens = estimateTokens(translatedText);
+// 优先使用API返回的实际token数
+const apiInputTokens = data.usage?.prompt_tokens;
+const apiOutputTokens = data.usage?.completion_tokens;
+const inputTokens = apiInputTokens || estimateTokens(translatePrompt);
+const outputTokens = apiOutputTokens || estimateTokens(translatedText);
 totalInputTokens += inputTokens;
 totalOutputTokens += outputTokens;
 
