@@ -265,9 +265,45 @@
                 </div>
             </div>
 
+            <!-- Translation Quality Mode -->
+            <div class="mb-8">
+                <label class="block text-lg font-semibold text-gray-700 mb-4">4. 翻译质量模式</label>
+                <div class="grid grid-cols-3 gap-3">
+                    <label class="relative cursor-pointer">
+                        <input type="radio" name="translationMode" value="quick" class="hidden peer">
+                        <div class="border-2 border-gray-200 rounded-lg p-3 text-center peer-checked:border-blue-500 peer-checked:bg-blue-50 hover:border-gray-300 transition-colors">
+                            <div class="text-lg font-bold text-gray-700 peer-checked:text-blue-700">⚡ 快速</div>
+                            <p class="text-xs text-gray-500 mt-1">直接翻译，速度最快</p>
+                        </div>
+                    </label>
+                    <label class="relative cursor-pointer">
+                        <input type="radio" name="translationMode" value="standard" class="hidden peer" checked>
+                        <div class="border-2 border-gray-200 rounded-lg p-3 text-center peer-checked:border-blue-500 peer-checked:bg-blue-50 hover:border-gray-300 transition-colors">
+                            <div class="text-lg font-bold text-gray-700 peer-checked:text-blue-700">📝 标准</div>
+                            <p class="text-xs text-gray-500 mt-1">重写式翻译，自然流畅</p>
+                        </div>
+                    </label>
+                    <label class="relative cursor-pointer">
+                        <input type="radio" name="translationMode" value="refined" class="hidden peer">
+                        <div class="border-2 border-gray-200 rounded-lg p-3 text-center peer-checked:border-blue-500 peer-checked:bg-blue-50 hover:border-gray-300 transition-colors">
+                            <div class="text-lg font-bold text-gray-700 peer-checked:text-blue-700">✨ 精翻</div>
+                            <p class="text-xs text-gray-500 mt-1">翻译+审校，质量最高</p>
+                        </div>
+                    </label>
+                </div>
+                <p id="modeDescription" class="text-xs text-gray-500 mt-2">标准模式：采用「重写而非直译」策略，产出自然地道的目标语言文本。</p>
+            </div>
+
+            <!-- Custom Glossary -->
+            <div class="mb-8">
+                <label class="block text-lg font-semibold text-gray-700 mb-2">5. 术语表（可选）</label>
+                <p class="text-xs text-gray-500 mb-2">每行一个术语对，格式：英文=中文（如：Machine Learning=机器学习）</p>
+                <textarea id="customGlossary" rows="3" placeholder="例如：&#10;Transformer=Transformer 模型&#10;Hallucination=幻觉&#10;Agent=智能体" class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm font-mono"></textarea>
+            </div>
+
             <!-- API Key Input -->
             <div class="mb-8">
-                <label class="block text-lg font-semibold text-gray-700 mb-4">4. 翻译服务设置</label>
+                <label class="block text-lg font-semibold text-gray-700 mb-4">6. 翻译服务设置</label>
                 <div class="space-y-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">选择翻译服务</label>
