@@ -831,9 +831,8 @@ fileInput.value = '';
 }
 }
 
-// 批量处理多个EPUB文件（保持串行，但内部并发优化）
+// 批量处理多个EPUB文件（并行处理，信号量控制内存）
 async function processMultipleFiles(files, sourceLang, targetLang, service) {
-// 不调用 resetAllData()，因为UI状态已经在 handleTranslate 中设置好了
 // 只重置必要的数据
 epubFile = null;
 epubZip = null;
@@ -857,62 +856,134 @@ batchInfo.classList.remove('hidden');
 document.getElementById('totalFiles').textContent = files.length;
 }
 
-addLog(`开始批量处理 ${files.length} 个EPUB文件（优化版）`);
+addLog(`开始批量处理 ${files.length} 个EPUB文件（并行模式）`);
 
-// 依次处理每个文件（内部已优化并发）
-for (let i = 0; i < files.length; i++) {
-currentBatchIndex = i;
-const file = files[i];
+// 并行处理EPUB文件，最多同时处理2个（避免内存过大）
+const CONCURRENT_EPUBS = Math.min(2, files.length);
+const epubSemaphore = createSemaphore(CONCURRENT_EPUBS);
+let completedCount = 0;
+
+const filePromises = files.map((file, i) => {
+return epubSemaphore(async () => {
+if (shouldCancel) return;
 
 // 更新批量处理计数器
 if (batchInfo) {
-document.getElementById('currentIndex').textContent = i + 1;
+document.getElementById('currentIndex').textContent = completedCount + 1;
 }
 
-// 更新文件列表状态：处理中
 updateFileStatus(i, 'processing');
 addLog(`[${i + 1}/${files.length}] 正在处理: ${file.name}`);
 
 try {
-// 处理当前文件
-await processFile(file);
+// 为每个文件创建独立的翻译上下文
+const fileEpubZip = new JSZip();
+const fileData = await file.arrayBuffer();
+const zip = await JSZip.loadAsync(fileData);
 
-// 为当前文件重置字数统计（但保持token累积）
-totalCharsToTranslate = 0;
-translatedChars = 0;
-totalSourceChars = 0; // 重置原文统计，避免累积
+// 分析文件内容
+const allFiles = Object.keys(zip.files);
+const htmlFiles = [];
+const otherFiles = [];
+let fileCharsToTranslate = 0;
 
-// 执行翻译（这是关键！）
-await translateCurrentFile(sourceLang, targetLang, service);
+for (const filename of allFiles) {
+const zipFile = zip.files[filename];
+if (!zipFile.dir) {
+if (filename.endsWith('.html') || filename.endsWith('.xhtml')) {
+htmlFiles.push(filename);
+const content = await zipFile.async('string');
+const parser = new DOMParser();
+const doc = parser.parseFromString(content, 'text/html');
+const text = doc.body.textContent || '';
+fileCharsToTranslate += text.trim().replace(/\s+/g, '').length;
+} else {
+otherFiles.push(filename);
+}
+}
+}
 
-// 保存翻译结果
-if (translatedEpub) {
+addLog(`  -> ${file.name}: ${htmlFiles.length} 个HTML文件, ${fileCharsToTranslate.toLocaleString()} 字`);
+
+// 创建翻译后的zip
+const translatedZip = new JSZip();
+
+// 并发翻译HTML文件
+const htmlPromises = htmlFiles.map(async (filename) => {
+const content = await zip.files[filename].async('string');
+const translatedText = await translateText(content, sourceLang, targetLang, service);
+
+// 更新进度
+const parser = new DOMParser();
+const doc = parser.parseFromString(content, 'text/html');
+const text = doc.body.textContent || '';
+const charCount = text.trim().replace(/\s+/g, '').length;
+translatedChars += charCount;
+updateTokenDisplay();
+
+return { filename, translatedText };
+});
+
+// 同时处理非HTML文件
+const otherPromises = otherFiles.map(async (filename) => {
+const zipFile = zip.files[filename];
+const content = await zipFile.async('arraybuffer');
+
+if (filename.endsWith('.opf')) {
+let opfContent = new TextDecoder().decode(content);
+const convertCheckbox = document.getElementById('convertToHorizontal');
+if (convertCheckbox && convertCheckbox.checked) {
+opfContent = opfContent.replace(/page-progression-direction\s*=\s*["']?rtl["']?/gi, 'page-progression-direction="ltr"');
+opfContent = opfContent.replace(/rendition:orientation\s*=\s*["']?vertical["']?/gi, 'rendition:orientation="auto"');
+opfContent = opfContent.replace(/rendition:spread\s*=\s*["']?(right|left)["']?/gi, 'rendition:spread="auto"');
+opfContent = opfContent.replace(/page-spread-direction\s*=\s*["']?rtl["']?/gi, 'page-spread-direction="ltr"');
+}
+const translatedText = await translateMetadata(opfContent, sourceLang, targetLang);
+return { filename, content: translatedText, isText: true };
+} else if (filename.endsWith('.css')) {
+const cssContent = new TextDecoder().decode(content);
+const convertedCss = convertVerticalToHorizontal(cssContent);
+return { filename, content: convertedCss, isText: true };
+} else if (filename.endsWith('.ncx')) {
+const ncxContent = new TextDecoder().decode(content);
+const convertedNcx = convertVerticalToHorizontal(ncxContent);
+return { filename, content: convertedNcx, isText: true };
+} else {
+return { filename, content: content, isText: false };
+}
+});
+
+// 等待所有文件处理完成
+const [htmlResults, otherResults] = await Promise.all([
+Promise.all(htmlPromises),
+Promise.all(otherPromises)
+]);
+
+// 写入翻译后的zip
+for (const result of htmlResults) {
+translatedZip.file(result.filename, result.translatedText);
+}
+for (const result of otherResults) {
+translatedZip.file(result.filename, result.content);
+}
+
 translatedEpubList.push({
 file: file,
-translatedEpub: translatedEpub,
+translatedEpub: translatedZip,
 fileName: file.name
 });
-// 更新文件列表状态：已完成
+completedCount++;
 updateFileStatus(i, 'completed');
 addLog(`  -> ✓ ${file.name} 处理完成`);
-}
+
 } catch (error) {
-// 更新文件列表状态：失败
 updateFileStatus(i, 'failed', error.message);
 addLog(`  -> ✗ ${file.name} 处理失败: ${error.message}`, true);
 }
+});
+});
 
-// 重置状态以准备下一个文件
-if (i < files.length - 1) {
-// 不是最后一个文件，重置部分状态
-epubFile = null;
-epubZip = null;
-translatedEpub = null;
-// 重置当前文件的字数统计，但保持token累积
-totalCharsToTranslate = 0;
-translatedChars = 0;
-}
-}
+await Promise.all(filePromises);
 
 addLog(`✓ 批量处理完成！共处理 ${translatedEpubList.length} 个文件`);
 
@@ -2236,9 +2307,6 @@ addLog(`统计完成: 共 ${totalCharsToTranslate.toLocaleString()} 字待翻译
 // Create new zip for translated content
 translatedEpub = new JSZip();
 
-// Copy all files
-let processedFiles = 0;
-
 // 分离HTML文件和非HTML文件
 const htmlFiles = [];
 const otherFiles = [];
@@ -2255,34 +2323,25 @@ otherFiles.push(filename);
 
 addLog(`文件分类: ${htmlFiles.length} 个HTML文件（将并发翻译），${otherFiles.length} 个其他文件`);
 
-// 并发翻译HTML文件（一次处理4个文件）
-const CONCURRENT_FILES = 8;
-for (let i = 0; i < htmlFiles.length; i += CONCURRENT_FILES) {
-// 检查是否需要取消
-if (shouldCancel) {
-stopTimeUpdate(); // 停止实时时长更新
-addLog('⚠️ 翻译已取消', true);
-isTranslating = false;
-translateBtn.disabled = false;
-translateBtn.classList.remove('hidden');
-cancelBtn.classList.add('hidden');
-return;
-}
-
-const batchEnd = Math.min(i + CONCURRENT_FILES, htmlFiles.length);
-const currentBatch = htmlFiles.slice(i, batchEnd);
-
-addLog(`并发翻译文件组 ${Math.floor(i/CONCURRENT_FILES) + 1}: ${currentBatch.map(f => f.split('/').pop()).join(', ')}`);
-
-// 并发翻译当前批次的文件
-const translationPromises = currentBatch.map(async (filename) => {
+// 预读取所有HTML文件内容（I/O与翻译并行）
+addLog('预读取HTML文件...');
+const htmlContents = new Map();
+await Promise.all(htmlFiles.map(async (filename) => {
 const file = epubZip.files[filename];
-const content = await file.async('arraybuffer');
+const content = await file.async('string');
+htmlContents.set(filename, content);
+}));
+addLog(`预读取完成: ${htmlFiles.length} 个文件已载入内存`);
 
-updateProgress(`正在翻译: ${filename}`, (translatedChars / totalCharsToTranslate) * 100);
+// HTML翻译 与 非HTML文件处理 并行执行
+const htmlTranslationTask = (async () => {
+// 所有HTML文件同时提交，由translationSemaphore控制API并发
+const htmlPromises = htmlFiles.map(async (filename) => {
+if (shouldCancel) return { filename, translatedText: htmlContents.get(filename) };
+
+const textContent = htmlContents.get(filename);
 addLog(`处理文件: ${filename}`);
 
-const textContent = new TextDecoder().decode(content);
 const translatedText = await translateText(textContent, sourceLang, targetLang, service);
 
 // 更新已翻译字数
@@ -2293,23 +2352,6 @@ const charCount = text.trim().replace(/\s+/g, '').length;
 translatedChars += charCount;
 updateTokenDisplay();
 
-// 验证翻译后的内容
-const translatedParser = new DOMParser();
-const translatedDoc = translatedParser.parseFromString(translatedText, 'text/html');
-const translatedBodyText = translatedDoc.body.textContent || '';
-const translatedBodyLength = translatedBodyText.trim().length;
-const translatedInnerLength = translatedDoc.body.innerHTML.trim().length;
-
-// 检查内容是否真正为空（包括SVG等非文本元素）
-if (translatedBodyLength === 0 && translatedInnerLength === 0) {
-addLog(`⚠️ 警告: ${filename} 翻译后内容为空！`, true);
-} else if (translatedBodyLength === 0 && translatedInnerLength > 0) {
-// 有HTML内容但没有文本（如SVG），这是正常的
-addLog(`  -> ✓ 翻译完成（仅包含非文本内容，如SVG/图片）`);
-} else {
-addLog(`  -> ✓ 翻译完成，内容长度: ${translatedBodyLength} 字`);
-}
-
 // 更新进度显示
 const progress = Math.round((translatedChars / totalCharsToTranslate) * 100);
 updateProgress(`翻译中... ${translatedChars.toLocaleString()}/${totalCharsToTranslate.toLocaleString()} 字 (${progress}%)`, progress);
@@ -2317,171 +2359,69 @@ updateProgress(`翻译中... ${translatedChars.toLocaleString()}/${totalCharsToT
 return { filename, translatedText };
 });
 
-// 等待当前批次的所有文件翻译完成
-const results = await Promise.all(translationPromises);
+return await Promise.all(htmlPromises);
+})();
 
-// 保存翻译结果
-for (const result of results) {
-await translatedEpub.file(result.filename, result.translatedText);
-}
-
-// 更新进度
-addLog(`进度: ${translatedChars.toLocaleString()}/${totalCharsToTranslate.toLocaleString()} 字 (${Math.round((translatedChars / totalCharsToTranslate) * 100)}%)`);
-}
-
-// 处理非HTML文件
+const otherFilesTask = (async () => {
+const results = [];
 for (const filename of otherFiles) {
 const file = epubZip.files[filename];
 const content = await file.async('arraybuffer');
 
 if (filename.endsWith('.opf')) {
-// 处理OPF文件（元数据）
 addLog(`处理元数据: ${filename}`);
-
 let opfContent = new TextDecoder().decode(content);
 
-// 检查并转换OPF中的页面方向属性
 const convertCheckbox = document.getElementById('convertToHorizontal');
 if (convertCheckbox && convertCheckbox.checked) {
-addLog(`  -> 检查OPF文件中的页面方向...`);
-
-// 转换page-progression-direction属性（多种引号格式）
-const opfPageProgressionDouble = (opfContent.match(/page-progression-direction\s*=\s*"rtl"/gi) || []).length;
-const opfPageProgressionSingle = (opfContent.match(/page-progression-direction\s*=\s*'rtl'/gi) || []).length;
-const opfPageProgressionNoQuote = (opfContent.match(/page-progression-direction\s*=\s*rtl(?!\w)/gi) || []).length;
-const totalPageProgression = opfPageProgressionDouble + opfPageProgressionSingle + opfPageProgressionNoQuote;
-
-if (totalPageProgression > 0) {
-if (opfPageProgressionDouble > 0) {
-opfContent = opfContent.replace(
-/page-progression-direction\s*=\s*"rtl"/gi,
-'page-progression-direction="ltr"'
-);
-}
-if (opfPageProgressionSingle > 0) {
-opfContent = opfContent.replace(
-/page-progression-direction\s*=\s*'rtl'/gi,
-"page-progression-direction='ltr'"
-);
-}
-if (opfPageProgressionNoQuote > 0) {
-opfContent = opfContent.replace(
-/page-progression-direction\s*=\s*rtl(?!\w)/gi,
-'page-progression-direction=ltr'
-);
-}
-addLog(`  -> ✓ 转换OPF中spine的页面方向: ${totalPageProgression} 个`);
+opfContent = opfContent.replace(/page-progression-direction\s*=\s*["']?rtl["']?/gi, 'page-progression-direction="ltr"');
+opfContent = opfContent.replace(/rendition:orientation\s*=\s*["']?vertical["']?/gi, 'rendition:orientation="auto"');
+opfContent = opfContent.replace(/rendition:spread\s*=\s*["']?(right|left)["']?/gi, 'rendition:spread="auto"');
+opfContent = opfContent.replace(/page-spread-direction\s*=\s*["']?rtl["']?/gi, 'page-spread-direction="ltr"');
 }
 
-// 转换rendition:orientation属性（多种引号格式）
-const renditionOriDouble = (opfContent.match(/rendition:orientation\s*=\s*"vertical"/gi) || []).length;
-const renditionOriSingle = (opfContent.match(/rendition:orientation\s*=\s*'vertical'/gi) || []).length;
-const totalRenditionOri = renditionOriDouble + renditionOriSingle;
-
-if (totalRenditionOri > 0) {
-if (renditionOriDouble > 0) {
-opfContent = opfContent.replace(
-/rendition:orientation\s*=\s*"vertical"/gi,
-'rendition:orientation="auto"'
-);
-}
-if (renditionOriSingle > 0) {
-opfContent = opfContent.replace(
-/rendition:orientation\s*=\s*'vertical'/gi,
-"rendition:orientation='auto'"
-);
-}
-addLog(`  -> ✓ 移除OPF中的竖排方向属性: ${totalRenditionOri} 个`);
-}
-
-// 转换rendition:spread属性
-const renditionSpreadRight = (opfContent.match(/rendition:spread\s*=\s*"right"/gi) || []).length;
-const renditionSpreadLeft = (opfContent.match(/rendition:spread\s*=\s*"left"/gi) || []).length;
-
-if (renditionSpreadRight > 0) {
-opfContent = opfContent.replace(
-/rendition:spread\s*=\s*"right"/gi,
-'rendition:spread="auto"'
-);
-addLog(`  -> ✓ 转换spread属性 right->auto: ${renditionSpreadRight} 个`);
-}
-
-if (renditionSpreadLeft > 0) {
-opfContent = opfContent.replace(
-/rendition:spread\s*=\s*"left"/gi,
-'rendition:spread="auto"'
-);
-addLog(`  -> ✓ 转换spread属性 left->auto: ${renditionSpreadLeft} 个`);
-}
-
-// 转换page-spread-direction属性（如果存在）
-const pageSpreadDirDouble = (opfContent.match(/page-spread-direction\s*=\s*"rtl"/gi) || []).length;
-const pageSpreadDirSingle = (opfContent.match(/page-spread-direction\s*=\s*'rtl'/gi) || []).length;
-const totalPageSpread = pageSpreadDirDouble + pageSpreadDirSingle;
-
-if (totalPageSpread > 0) {
-if (pageSpreadDirDouble > 0) {
-opfContent = opfContent.replace(
-/page-spread-direction\s*=\s*"rtl"/gi,
-'page-spread-direction="ltr"'
-);
-}
-if (pageSpreadDirSingle > 0) {
-opfContent = opfContent.replace(
-/page-spread-direction\s*=\s*'rtl'/gi,
-"page-spread-direction='ltr'"
-);
-}
-addLog(`  -> ✓ 转换page-spread-direction属性: ${totalPageSpread} 个`);
-}
-}
-
-// 翻译元数据
 const translatedText = await translateMetadata(opfContent, sourceLang, targetLang);
-await translatedEpub.file(filename, translatedText);
-
-// 验证翻译后的内容
-const translatedParser = new DOMParser();
-const translatedDoc = translatedParser.parseFromString(translatedText, 'text/html');
-const translatedBodyText = translatedDoc.body.textContent || '';
-const translatedBodyLength = translatedBodyText.trim().length;
-const translatedInnerLength = translatedDoc.body.innerHTML.trim().length;
-
-// 检查内容是否真正为空（包括SVG等非文本元素）
-if (translatedBodyLength === 0 && translatedInnerLength === 0) {
-addLog(`⚠️ 警告: ${filename} 翻译后内容为空！`, true);
-} else if (translatedBodyLength === 0 && translatedInnerLength > 0) {
-// 有HTML内容但没有文本（如SVG），这是正常的
-addLog(`  -> ✓ 翻译完成（仅包含非文本内容，如SVG/图片）`);
-} else {
-addLog(`  -> ✓ 翻译完成，内容长度: ${translatedBodyLength} 字`);
-}
+results.push({ filename, content: translatedText, isText: true });
 } else if (filename.endsWith('.css')) {
-// 处理CSS文件 - 转换竖排为横排
 addLog(`处理CSS文件: ${filename}`);
 const cssContent = new TextDecoder().decode(content);
-
-// 检查CSS中是否包含竖排属性
-const hasVerticalMode = /writing-mode\s*:\s*vertical/i.test(cssContent) ||
-/-epub-writing-mode\s*:\s*vertical/i.test(cssContent);
-if (hasVerticalMode) {
-addLog(`  -> CSS文件包含竖排属性`);
-}
-
 const convertedCss = convertVerticalToHorizontal(cssContent);
-await translatedEpub.file(filename, convertedCss);
+results.push({ filename, content: convertedCss, isText: true });
 } else if (filename.endsWith('.ncx')) {
-// NCX文件也可能包含样式，尝试转换
 addLog(`处理NCX文件: ${filename}`);
 const ncxContent = new TextDecoder().decode(content);
 const convertedNcx = convertVerticalToHorizontal(ncxContent);
-await translatedEpub.file(filename, convertedNcx);
+results.push({ filename, content: convertedNcx, isText: true });
 } else {
-// Copy other files as-is
-await translatedEpub.file(filename, content);
+results.push({ filename, content: content, isText: false });
 }
-processedFiles++;
 }
+return results;
+})();
+
+// 等待HTML翻译和非HTML处理同时完成
+const [htmlResults, otherResults] = await Promise.all([htmlTranslationTask, otherFilesTask]);
+
+if (shouldCancel) {
+stopTimeUpdate();
+addLog('⚠️ 翻译已取消', true);
+isTranslating = false;
+translateBtn.disabled = false;
+translateBtn.classList.remove('hidden');
+cancelBtn.classList.add('hidden');
+return;
+}
+
+// 写入翻译结果到zip
+for (const result of htmlResults) {
+await translatedEpub.file(result.filename, result.translatedText);
+}
+for (const result of otherResults) {
+await translatedEpub.file(result.filename, result.content);
+}
+
+// 释放预读取内存
+htmlContents.clear();
 
 updateProgress('完成', 100);
 addLog('✓ 翻译完成！');
