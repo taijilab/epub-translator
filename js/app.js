@@ -68,7 +68,7 @@ if (queue.length > 0) queue.shift()();
 }
 };
 }
-const translationSemaphore = createSemaphore(15); // 最大15个并发API请求
+const translationSemaphore = createSemaphore(30); // 最大30个并发API请求
 
 // 全局语言名称映射（替代文件中多处局部定义）
 const LANG_NAMES = {
@@ -2230,7 +2230,7 @@ otherFiles.push(filename);
 addLog(`文件分类: ${htmlFiles.length} 个HTML文件（将并发翻译），${otherFiles.length} 个其他文件`);
 
 // 并发翻译HTML文件（一次处理4个文件）
-const CONCURRENT_FILES = 4;
+const CONCURRENT_FILES = 8;
 for (let i = 0; i < htmlFiles.length; i += CONCURRENT_FILES) {
 // 检查是否需要取消
 if (shouldCancel) {
@@ -3945,10 +3945,7 @@ const progress = Math.round((batchEnd / groupedParagraphs.length) * 100);
 updateProgress(`翻译中...`, progress);
 addLog(`翻译进度: ${translatedCount}/${paragraphs.length} 段完成 (${progress}%) - 已处理 ${batchEnd}/${groupedParagraphs.length} 组`);
 
-// 添加小延迟避免API限流
-if (batchEnd < groupedParagraphs.length) {
-await new Promise(resolve => setTimeout(resolve, 200));
-}
+// 批次延迟已移除：信号量已控制并发，无需额外等待
 }
 
 addLog(`✓ 翻译完成！共翻译 ${translatedCount} 个段落`);
