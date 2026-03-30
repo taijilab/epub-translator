@@ -858,6 +858,32 @@ document.getElementById('totalFiles').textContent = files.length;
 
 addLog(`开始批量处理 ${files.length} 个EPUB文件（并行模式）`);
 
+// 先扫描所有文件，统计总字数
+addLog('正在统计所有文件字数...');
+totalCharsToTranslate = 0;
+translatedChars = 0;
+
+const fileZips = []; // 缓存解析后的zip，避免重复解析
+for (let i = 0; i < files.length; i++) {
+const fileData = await files[i].arrayBuffer();
+const zip = await JSZip.loadAsync(fileData);
+fileZips.push(zip);
+
+const allFileNames = Object.keys(zip.files);
+for (const filename of allFileNames) {
+const zipFile = zip.files[filename];
+if (!zipFile.dir && (filename.endsWith('.html') || filename.endsWith('.xhtml'))) {
+const content = await zipFile.async('string');
+const parser = new DOMParser();
+const doc = parser.parseFromString(content, 'text/html');
+const text = doc.body.textContent || '';
+totalCharsToTranslate += text.trim().replace(/\s+/g, '').length;
+}
+}
+}
+addLog(`统计完成: ${files.length} 个文件共 ${totalCharsToTranslate.toLocaleString()} 字待翻译`);
+updateTokenDisplay(true);
+
 // 并行处理EPUB文件，最多同时处理2个（避免内存过大）
 const CONCURRENT_EPUBS = Math.min(2, files.length);
 const epubSemaphore = createSemaphore(CONCURRENT_EPUBS);
@@ -876,34 +902,26 @@ updateFileStatus(i, 'processing');
 addLog(`[${i + 1}/${files.length}] 正在处理: ${file.name}`);
 
 try {
-// 为每个文件创建独立的翻译上下文
-const fileEpubZip = new JSZip();
-const fileData = await file.arrayBuffer();
-const zip = await JSZip.loadAsync(fileData);
+// 使用预先解析好的zip
+const zip = fileZips[i];
 
-// 分析文件内容
+// 分类文件
 const allFiles = Object.keys(zip.files);
 const htmlFiles = [];
 const otherFiles = [];
-let fileCharsToTranslate = 0;
 
 for (const filename of allFiles) {
 const zipFile = zip.files[filename];
 if (!zipFile.dir) {
 if (filename.endsWith('.html') || filename.endsWith('.xhtml')) {
 htmlFiles.push(filename);
-const content = await zipFile.async('string');
-const parser = new DOMParser();
-const doc = parser.parseFromString(content, 'text/html');
-const text = doc.body.textContent || '';
-fileCharsToTranslate += text.trim().replace(/\s+/g, '').length;
 } else {
 otherFiles.push(filename);
 }
 }
 }
 
-addLog(`  -> ${file.name}: ${htmlFiles.length} 个HTML文件, ${fileCharsToTranslate.toLocaleString()} 字`);
+addLog(`  -> ${file.name}: ${htmlFiles.length} 个HTML文件, ${otherFiles.length} 个其他文件`);
 
 // 创建翻译后的zip
 const translatedZip = new JSZip();
@@ -913,12 +931,15 @@ const htmlPromises = htmlFiles.map(async (filename) => {
 const content = await zip.files[filename].async('string');
 const translatedText = await translateText(content, sourceLang, targetLang, service);
 
-// 更新进度
+// 更新全局进度
 const parser = new DOMParser();
 const doc = parser.parseFromString(content, 'text/html');
 const text = doc.body.textContent || '';
 const charCount = text.trim().replace(/\s+/g, '').length;
 translatedChars += charCount;
+
+const progress = totalCharsToTranslate > 0 ? Math.round((translatedChars / totalCharsToTranslate) * 100) : 0;
+updateProgress(`翻译中... ${translatedChars.toLocaleString()}/${totalCharsToTranslate.toLocaleString()} 字 (${progress}%)`, progress);
 updateTokenDisplay();
 
 return { filename, translatedText };
