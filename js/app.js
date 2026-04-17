@@ -9,9 +9,9 @@ let shouldCancel = false;
 let lastUpdateTime = 0;
 const UI_UPDATE_THROTTLE = 100; // 100ms节流
 
-// 翻译缓存：避免重复翻译相同内容
+// 翻译缓存：避免重复翻译相同内容（内存层 + IndexedDB 持久化层）
 const translationCache = new Map();
-const MAX_CACHE_SIZE = 1000; // 最大缓存条目数
+const MAX_CACHE_SIZE = 5000; // 内存缓存条目上限（IndexedDB 持久层为 50000）
 
 // 节流函数：限制函数执行频率
 function throttle(func, delay) {
@@ -40,7 +40,7 @@ function getCacheKey(text, sourceLang, targetLang) {
 return `${sourceLang}-${targetLang}-${text.length}-${fnv1aHash(text)}`;
 }
 
-// 添加到缓存
+// 添加到缓存（同时异步写入 IndexedDB）
 function addToCache(text, sourceLang, targetLang, result) {
 if (translationCache.size >= MAX_CACHE_SIZE) {
 // 清理最旧的条目（简单的FIFO）
@@ -49,12 +49,68 @@ translationCache.delete(firstKey);
 }
 const key = getCacheKey(text, sourceLang, targetLang);
 translationCache.set(key, result);
+// 异步持久化到 IndexedDB（批量写入，不阻塞翻译）
+if (window.Persistence) {
+window.Persistence.enqueueCacheWrite(key, result);
+}
 }
 
 // 从缓存获取
 function getFromCache(text, sourceLang, targetLang) {
 const key = getCacheKey(text, sourceLang, targetLang);
 return translationCache.get(key);
+}
+
+// ============================================================
+// 持久化初始化：预加载缓存 + 检查未完成的翻译
+// ============================================================
+let currentFileId = null; // 当前上传文件的指纹
+let currentFileProgress = null; // 当前文件的已保存进度（若有）
+
+async function initPersistence() {
+if (!window.Persistence) return;
+try {
+const loaded = await window.Persistence.preloadCache(translationCache);
+if (loaded > 0) {
+console.log(`[持久化] 已加载 ${loaded} 条历史翻译缓存`);
+}
+// 后台清理过期条目，不阻塞UI
+setTimeout(() => window.Persistence.trimCache(), 5000);
+} catch (e) {
+console.warn('[持久化] 初始化失败:', e.message);
+}
+}
+
+// 生成文件指纹并检查历史进度
+async function checkFileResumeState(file) {
+if (!window.Persistence) return null;
+try {
+currentFileId = await window.Persistence.computeFileId(file);
+currentFileProgress = await window.Persistence.getFileProgress(currentFileId);
+return currentFileProgress;
+} catch (e) {
+console.warn('[持久化] 检查进度失败:', e.message);
+return null;
+}
+}
+
+// 保存当前文件的翻译进度
+async function persistCurrentProgress(status) {
+if (!window.Persistence || !currentFileId) return;
+const data = {
+fileName: epubFile?.name || 'unknown',
+fileSize: epubFile?.size || 0,
+status: status || 'in_progress', // in_progress | completed | cancelled | failed
+totalChars: totalCharsToTranslate,
+translatedChars,
+inputTokens: totalInputTokens,
+outputTokens: totalOutputTokens,
+sourceLang: document.getElementById('sourceLang')?.value,
+targetLang: document.getElementById('targetLang')?.value,
+service: document.getElementById('translationService')?.value,
+mode: getTranslationMode?.() || 'standard'
+};
+await window.Persistence.saveFileProgress(currentFileId, data);
 }
 
 // ===== 性能优化全局常量 =====
@@ -597,6 +653,7 @@ console.error('加载配置失败:', error);
 document.addEventListener('DOMContentLoaded', function() {
 initializeDOMElements();
 loadConfig();
+initPersistence();
 
 // 绑定文件上传相关事件监听器
 dropZone.addEventListener('click', () => fileInput.click());
@@ -617,6 +674,19 @@ downloadAllBtn.addEventListener('click', handleDownload);
 }
 
 translationService.addEventListener('change', handleServiceChange);
+
+// 绑定恢复翻译横幅按钮
+const resumeContinueBtn = document.getElementById('resumeContinueBtn');
+const resumeDiscardBtn = document.getElementById('resumeDiscardBtn');
+if (resumeContinueBtn) {
+resumeContinueBtn.addEventListener('click', () => {
+hideResumeBanner();
+addLog && addLog('✓ 已启用断点续传，翻译时将优先使用缓存');
+});
+}
+if (resumeDiscardBtn) {
+resumeDiscardBtn.addEventListener('click', discardSavedProgress);
+}
 
 // 绑定复制日志按钮
 const copyLogBtn = document.getElementById('copyLogBtn');
@@ -758,6 +828,8 @@ shouldCancel = true;
 addLog('⚠️ 正在取消翻译...', true);
 cancelBtn.disabled = true;
 cancelBtn.textContent = '取消中...';
+// 保存当前进度以便下次恢复
+persistCurrentProgress('cancelled');
 }
 }
 
@@ -1179,6 +1251,43 @@ await parseEpub(file);
 
 // 分析文件内容
 await analyzeEpubContent();
+
+// 检查是否有未完成的翻译进度
+if (!isBatchMode) {
+const progress = await checkFileResumeState(file);
+if (progress && progress.status === 'in_progress' && progress.translatedChars > 0) {
+showResumeBanner(progress);
+}
+}
+}
+
+// 显示恢复翻译的提示横幅
+function showResumeBanner(progress) {
+const banner = document.getElementById('resumeBanner');
+if (!banner) return;
+const percent = progress.totalChars > 0
+? Math.round((progress.translatedChars / progress.totalChars) * 100)
+: 0;
+const date = new Date(progress.updatedAt).toLocaleString();
+const info = document.getElementById('resumeBannerInfo');
+if (info) {
+info.textContent = `检测到之前翻译过此文件（${date}），进度 ${progress.translatedChars.toLocaleString()}/${progress.totalChars.toLocaleString()} 字 (${percent}%)`;
+}
+banner.classList.remove('hidden');
+}
+
+function hideResumeBanner() {
+const banner = document.getElementById('resumeBanner');
+if (banner) banner.classList.add('hidden');
+}
+
+// 用户选择放弃历史进度
+async function discardSavedProgress() {
+if (!currentFileId || !window.Persistence) return;
+await window.Persistence.deleteFileProgress(currentFileId);
+currentFileProgress = null;
+hideResumeBanner();
+addLog && addLog('已清除历史进度，将重新翻译');
 }
 
 // 翻译当前已解析的文件
@@ -1367,6 +1476,9 @@ processedFiles++;
 updateProgress('完成', 100);
 addLog('✓ 翻译完成！');
 
+// 持久化最终进度
+persistCurrentProgress('completed');
+
 // 更新文件列表状态（单文件模式）
 if (fileListData.length > 0) {
 	updateFileStatus(0, 'completed');
@@ -1388,6 +1500,8 @@ stopTimeUpdate(); // 停止实时时长更新
 } catch (error) {
 stopTimeUpdate(); // 停止实时时长更新
 addLog('翻译过程中出错: ' + error.message, true);
+// 持久化失败状态以便下次续传
+persistCurrentProgress(shouldCancel ? 'cancelled' : 'failed');
 translateBtn.disabled = false;
 translateBtn.classList.remove('hidden');
 cancelBtn.classList.add('hidden');
@@ -1858,6 +1972,7 @@ return `${minutes}分${remainingSeconds}秒`;
 
 // 更新token显示（带节流优化，force=true 时跳过节流）
 let lastTokenUpdateTime = 0;
+let lastProgressSaveTime = 0;
 const TOKEN_UPDATE_THROTTLE = 200; // 200ms节流
 
 function updateTokenDisplay(force) {
@@ -1904,6 +2019,12 @@ document.getElementById('translationTime').textContent = formatDuration(elapsedS
 } else if (translationStartTime && !isTranslating) {
 elapsedSeconds = (translationEndTime - translationStartTime) / 1000;
 document.getElementById('translationTime').textContent = formatDuration(elapsedSeconds);
+}
+
+// 定期持久化进度（每10秒一次）
+if (isTranslating && currentFileId && now - lastProgressSaveTime > 10000) {
+lastProgressSaveTime = now;
+persistCurrentProgress('in_progress');
 }
 
 // 预估剩余时间
@@ -2245,6 +2366,8 @@ totalCharsToTranslate = 0;
 translatedChars = 0;
 translationStartTime = Date.now();
 translationEndTime = null;
+lastProgressSaveTime = 0;
+hideResumeBanner();
 startTimeUpdate(); // 启动实时时长更新
 
 const modeNames = { quick: '快速', standard: '标准', refined: '精翻' };
@@ -2291,6 +2414,8 @@ totalCharsToTranslate = 0;
 translatedChars = 0;
 translationStartTime = Date.now();
 translationEndTime = null;
+lastProgressSaveTime = 0;
+hideResumeBanner();
 startTimeUpdate(); // 启动实时时长更新
 
 // 清空对比窗口
@@ -2447,6 +2572,9 @@ htmlContents.clear();
 updateProgress('完成', 100);
 addLog('✓ 翻译完成！');
 
+// 持久化最终进度
+persistCurrentProgress('completed');
+
 // 更新文件列表状态（单文件模式）
 if (fileListData.length > 0) {
 	updateFileStatus(0, 'completed');
@@ -2463,6 +2591,8 @@ stopTimeUpdate(); // 停止实时时长更新
 } catch (error) {
 stopTimeUpdate(); // 停止实时时长更新
 addLog('翻译过程中出错: ' + error.message, true);
+// 持久化失败状态以便下次续传
+persistCurrentProgress(shouldCancel ? 'cancelled' : 'failed');
 translateBtn.disabled = false;
 translateBtn.classList.remove('hidden');
 cancelBtn.classList.add('hidden');
