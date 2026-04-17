@@ -62,6 +62,114 @@ return translationCache.get(key);
 }
 
 // ============================================================
+// SSE 流式响应解析 - OpenAI 兼容的 chat/completions 流
+// ============================================================
+
+// 流式模式开关（默认启用）
+let useStreamMode = true;
+
+// 流式聊天调用：逐 token 读取，实时回调
+// 返回：{ text: 完整文本, usage: token用量 or null }
+async function streamChatCompletion({ url, headers, body, signal, onChunk }) {
+const streamBody = { ...body, stream: true };
+
+const response = await fetch(url, {
+method: 'POST',
+headers,
+body: JSON.stringify(streamBody),
+signal
+});
+
+if (!response.ok) {
+// 错误响应不是流，直接读 text/json
+let errorText = '';
+try {
+errorText = await response.text();
+} catch (e) {}
+let errorMsg = `API 调用失败: ${response.status}`;
+try {
+const errorJson = JSON.parse(errorText);
+if (errorJson.error?.message) errorMsg += ` - ${errorJson.error.message}`;
+} catch {
+if (errorText) errorMsg += ` - ${errorText}`;
+}
+const err = new Error(errorMsg);
+err.status = response.status;
+throw err;
+}
+
+// 检测响应类型 - 某些服务器忽略 stream:true 返回普通 JSON
+const contentType = response.headers.get('content-type') || '';
+const isEventStream = contentType.includes('event-stream') || contentType.includes('stream');
+
+if (!response.body || !response.body.getReader || !isEventStream) {
+// 非流式响应，降级为一次性读取
+const data = await response.json();
+const text = data.choices?.[0]?.message?.content?.trim() || '';
+return { text, usage: data.usage || null };
+}
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder('utf-8');
+let buffer = '';
+let fullText = '';
+let usage = null;
+let chunkCount = 0;
+
+try {
+while (true) {
+const { done, value } = await reader.read();
+if (done) break;
+
+buffer += decoder.decode(value, { stream: true });
+
+// SSE 格式：每条消息以 \n\n 分隔，行以 data: 开头
+const lines = buffer.split('\n');
+buffer = lines.pop() || ''; // 保留可能不完整的最后一行
+
+for (const rawLine of lines) {
+const line = rawLine.trim();
+if (!line || !line.startsWith('data:')) continue;
+const payload = line.slice(5).trim();
+if (payload === '[DONE]') continue;
+
+try {
+const json = JSON.parse(payload);
+const delta = json.choices?.[0]?.delta?.content;
+if (delta) {
+fullText += delta;
+chunkCount++;
+if (onChunk) {
+try { onChunk(fullText, delta); } catch (e) {}
+}
+}
+if (json.usage) usage = json.usage;
+} catch (e) {
+// 不完整或非 JSON 片段，跳过
+}
+}
+}
+
+// 处理缓冲区残余
+if (buffer.trim().startsWith('data:')) {
+const payload = buffer.trim().slice(5).trim();
+if (payload && payload !== '[DONE]') {
+try {
+const json = JSON.parse(payload);
+const delta = json.choices?.[0]?.delta?.content;
+if (delta) fullText += delta;
+if (json.usage) usage = json.usage;
+} catch (e) {}
+}
+}
+} finally {
+try { reader.releaseLock(); } catch (e) {}
+}
+
+return { text: fullText.trim(), usage, chunkCount };
+}
+
+// ============================================================
 // 持久化初始化：预加载缓存 + 检查未完成的翻译
 // ============================================================
 let currentFileId = null; // 当前上传文件的指纹
@@ -568,7 +676,8 @@ openrouterModel: document.getElementById('openrouterModel')?.value || 'deepseek/
 customEndpoint: document.getElementById('apiEndpoint')?.value || '',
 customApiKey: document.getElementById('apiKey')?.value || '',
 translationMode: getTranslationMode(),
-customGlossary: document.getElementById('customGlossary')?.value || ''
+customGlossary: document.getElementById('customGlossary')?.value || '',
+useStreamMode: document.getElementById('streamModeToggle')?.checked ?? true
 };
 localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
 }
@@ -642,6 +751,15 @@ const glossaryInput = document.getElementById('customGlossary');
 if (glossaryInput) glossaryInput.value = config.customGlossary;
 }
 
+// 恢复流式响应开关
+const streamToggle = document.getElementById('streamModeToggle');
+if (streamToggle) {
+if (typeof config.useStreamMode === 'boolean') {
+streamToggle.checked = config.useStreamMode;
+}
+useStreamMode = streamToggle.checked;
+}
+
 addLog('已恢复上次的配置');
 }
 } catch (error) {
@@ -674,6 +792,16 @@ downloadAllBtn.addEventListener('click', handleDownload);
 }
 
 translationService.addEventListener('change', handleServiceChange);
+
+// 绑定流式响应开关
+const streamToggle = document.getElementById('streamModeToggle');
+if (streamToggle) {
+streamToggle.addEventListener('change', () => {
+useStreamMode = streamToggle.checked;
+saveConfig();
+addLog(useStreamMode ? '✓ 已启用流式响应' : '已关闭流式响应');
+});
+}
 
 // 绑定恢复翻译横幅按钮
 const resumeContinueBtn = document.getElementById('resumeContinueBtn');
@@ -3059,45 +3187,68 @@ const timeoutId = setTimeout(() => controller.abort(), 120000); // 120秒超时
 // 精翻模式使用稍高温度以获得更自然的表达
 const temperature = translationMode === 'refined' ? 0.4 : 0.3;
 
-const response = await fetch(`${baseUrl}chat/completions`, {
-method: 'POST',
-headers: {
-'Content-Type': 'application/json',
-'Authorization': `Bearer ${apiKey}`
-},
-body: JSON.stringify({
+const requestBody = {
 model: 'glm-4-flash',
 messages: [
-{
-role: 'system',
-content: systemPrompt
-},
-{
-role: 'user',
-content: userPrompt
-}
+{ role: 'system', content: systemPrompt },
+{ role: 'user', content: userPrompt }
 ],
 temperature: temperature,
 max_tokens: 8000
-}),
+};
+const requestHeaders = {
+'Content-Type': 'application/json',
+'Authorization': `Bearer ${apiKey}`
+};
+
+let translatedText;
+let apiUsage = null;
+
+if (useStreamMode) {
+try {
+const result = await streamChatCompletion({
+url: `${baseUrl}chat/completions`,
+headers: requestHeaders,
+body: requestBody,
+signal: controller.signal,
+onChunk: (fullText) => {
+updateComparisonWindow(
+originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
+fullText.substring(0, 200) + (fullText.length > 200 ? '...' : '')
+);
+}
+});
+translatedText = result.text;
+apiUsage = result.usage;
+} catch (streamErr) {
+clearTimeout(timeoutId);
+if (streamErr.status === 401) {
+throw new Error('智谱AI API Key 无效或已过期，请检查您的API Key设置');
+}
+throw streamErr;
+}
+} else {
+const response = await fetch(`${baseUrl}chat/completions`, {
+method: 'POST',
+headers: requestHeaders,
+body: JSON.stringify(requestBody),
 signal: controller.signal
 });
 
-clearTimeout(timeoutId);
-
 if (!response.ok) {
 const errorData = await response.json().catch(() => ({}));
-
-// 专门处理401认证错误
 if (response.status === 401) {
 throw new Error('智谱AI API Key 无效或已过期，请检查您的API Key设置');
 }
-
 throw new Error(`API 调用失败: ${response.status} - ${errorData.error?.message || response.statusText}`);
 }
 
 const data = await response.json();
-const translatedText = data.choices[0]?.message?.content?.trim();
+translatedText = data.choices[0]?.message?.content?.trim();
+apiUsage = data.usage || null;
+}
+
+clearTimeout(timeoutId);
 
 if (!translatedText) {
 throw new Error('API 返回了空响应');
@@ -3189,11 +3340,11 @@ translatedText.substring(0, 200) + (translatedText.length > 200 ? '...' : '')
 );
 
 // 优先使用API返回的实际token数
-const apiInputTokens = data.usage?.prompt_tokens;
-const apiOutputTokens = data.usage?.completion_tokens;
+const apiInputTokens = apiUsage?.prompt_tokens;
+const apiOutputTokens = apiUsage?.completion_tokens;
 
 // 如果API返回了token数，使用实际值；否则使用估算值
-const inputTokens = apiInputTokens || estimateTokens(translatePrompt);
+const inputTokens = apiInputTokens || estimateTokens(systemPrompt + userPrompt);
 const outputTokens = apiOutputTokens || estimateTokens(translatedText);
 
 totalInputTokens += inputTokens;
@@ -3920,47 +4071,66 @@ const timeoutId = setTimeout(() => controller.abort(), 120000); // 120秒超时
 // 精翻模式使用稍高温度以获得更自然的表达
 const temperature = translationMode === 'refined' ? 0.4 : 0.3;
 
-const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-method: 'POST',
-headers: {
+const requestBody = {
+model: model,
+messages: [
+{ role: 'system', content: systemPrompt },
+{ role: 'user', content: userPrompt }
+],
+temperature: temperature,
+max_tokens: 8000
+};
+const requestHeaders = {
 'Content-Type': 'application/json',
 'Authorization': `Bearer ${apiKey}`,
 'HTTP-Referer': window.location.href,
 'X-Title': 'EPUB Translator'
-},
-body: JSON.stringify({
-model: model,
-messages: [
-{
-role: 'system',
-content: systemPrompt
-},
-{
-role: 'user',
-content: userPrompt
+};
+
+let translatedText;
+let apiUsage = null;
+
+if (useStreamMode) {
+try {
+const result = await streamChatCompletion({
+url: 'https://openrouter.ai/api/v1/chat/completions',
+headers: requestHeaders,
+body: requestBody,
+signal: controller.signal,
+onChunk: (fullText) => {
+// 实时更新对比窗口（updateComparisonWindow 内部已节流）
+updateComparisonWindow(
+originalText.substring(0, 200) + (originalText.length > 200 ? '...' : ''),
+fullText.substring(0, 200) + (fullText.length > 200 ? '...' : '')
+);
 }
-],
-temperature: temperature,
-max_tokens: 8000
-}),
+});
+translatedText = result.text;
+apiUsage = result.usage;
+} catch (streamErr) {
+clearTimeout(timeoutId);
+if (streamErr.status === 401) {
+throw new Error('OpenRouter API Key 无效或已过期，请检查您的API Key设置');
+}
+throw streamErr;
+}
+} else {
+const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+method: 'POST',
+headers: requestHeaders,
+body: JSON.stringify(requestBody),
 signal: controller.signal
 });
 
-clearTimeout(timeoutId);
-
 if (!response.ok) {
-// 专门处理401认证错误
 if (response.status === 401) {
 throw new Error('OpenRouter API Key 无效或已过期，请检查您的API Key设置');
 }
-
 const errorText = await response.text();
 let errorMsg = `API 调用失败: ${response.status}`;
 try {
 const errorJson = JSON.parse(errorText);
-if (errorJson.error?.message) {
-errorMsg += ` - ${errorJson.error.message}`;
-}
+if (errorJson.error?.message) errorMsg += ` - ${errorJson.error.message}`;
 } catch {
 errorMsg += ` - ${errorText}`;
 }
@@ -3968,12 +4138,18 @@ throw new Error(errorMsg);
 }
 
 const data = await response.json();
-
 if (!data.choices || !data.choices[0] || !data.choices[0].message?.content) {
 throw new Error('API 返回数据格式不正确');
 }
+translatedText = data.choices[0].message.content.trim();
+apiUsage = data.usage || null;
+}
 
-const translatedText = data.choices[0].message.content.trim();
+clearTimeout(timeoutId);
+
+if (!translatedText) {
+throw new Error('API 返回了空响应');
+}
 
 // 清理AI回复中的提示词残留（如果有）
 const cleanedText = cleanTranslatedText(translatedText);
@@ -4000,9 +4176,9 @@ translatedText.substring(0, 200) + (translatedText.length > 200 ? '...' : '')
 );
 
 // 优先使用API返回的实际token数
-const apiInputTokens = data.usage?.prompt_tokens;
-const apiOutputTokens = data.usage?.completion_tokens;
-const inputTokens = apiInputTokens || estimateTokens(translatePrompt);
+const apiInputTokens = apiUsage?.prompt_tokens;
+const apiOutputTokens = apiUsage?.completion_tokens;
+const inputTokens = apiInputTokens || estimateTokens(systemPrompt + userPrompt);
 const outputTokens = apiOutputTokens || estimateTokens(translatedText);
 totalInputTokens += inputTokens;
 totalOutputTokens += outputTokens;
