@@ -1,0 +1,8 @@
+{
+  "sourceLang": "en",
+  "targetLang": "zh",
+  "terms": [
+    { "category": "人名", "source": "Alice Example", "target": "爱丽丝", "aliases": [{ "source": "Alice", "target": "爱丽丝" }] },
+    { "category": "技术术语", "source": "compute", "target": "算力" }
+  ]
+}

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en"><meta charset="utf-8"><title>LLM Regression Tests</title>
+<style>pre{white-space:pre-wrap;overflow-wrap:anywhere}iframe{box-sizing:border-box;max-width:100%}</style>
+<body>
+<h1>LLM Regression Tests</h1><pre id="results">Running...</pre>
+<section id="namedTermsPanel" hidden>
+<select id="termsBook" aria-label="测试书籍"></select><select id="termsCategory"><option value="">全部分类</option></select><input id="termsSearch">
+<button id="termsDownload">下载手册</button><button id="termsDownloadJson">导出 JSON</button><p id="termsSummary"></p><table><tbody id="termsRows"></tbody></table>
+</section>
+<iframe id="previewFixture" title="预览回归样例" sandbox="" style="width:100%;height:320px;border:1px solid #ccc"></iframe>
+<div hidden>
+<select id="translationService"><option>kimi</option></select>
+<input id="kimiApiKey" value="test-key"><input id="kimiBaseUrl" value="https://api.moonshot.cn/v1">
+<input id="kimiModel" value="kimi-k2.6"><input id="customGlossary"><input id="apiConcurrency" value="2">
+<input id="taotokenApiKey" value="taotoken-test-key"><input id="taotokenBaseUrl"><input id="taotokenModel" value="model-from-console">
+<button id="cancelBtn"></button>
+<input id="apiRetryLimit" value="2"><input id="apiRepairBudget" value="32"><input id="apiRepairTokens" value="128000">
+<h3 id="singleCompletionTitle"></h3><p id="singleCompletionDetail"></p>
+<h3 id="batchCompletionTitle"></h3><p id="batchCompletionDetail"></p>
+<div id="translationReport"><p id="translationReportSummary"></p><ul id="translationFailureList"></ul></div>
+</div>
+<script>
+let shouldCancel = false, totalInputTokens = 0, totalOutputTokens = 0, totalSourceChars = 0, totalTranslatedChars = 0;
+let totalCharsToTranslate = 1000000;
+const progressUpdates = [];
+function updateProgress(status, percent) { progressUpdates.push({ status, percent }); }
+let mode = 'standard';
+function getTranslationMode() { return mode; }
+function parseGlossary() { return document.getElementById('customGlossary').value.split('\n').filter(row => row.includes('=')).map(row => ({source:row.split('=')[0],target:row.split('=')[1]})); }
+function buildBatchSystemPrompt(source, target, quality) { return `${source}-${target}-${quality}-${document.getElementById('customGlossary').value}`; }
+function updateTokenDisplay() {}
+const previews = [];
+function updateComparisonWindow(original, translated) { previews.push({ original, translated }); }
+const capturedLogs = [];
+function addLog(message) { capturedLogs.push(message); }
+function saveConfig() {}
+function convertVerticalToHorizontal(html) { return html; }
+const cache = new Map();
+function getFromCache(text, source, target) { return cache.get(JSON.stringify([LLM.cacheScope(), source, target, text])); }
+function addToCache(text, source, target, result) { cache.set(JSON.stringify([LLM.cacheScope(), source, target, text]), result); }
+async function getFromCacheAsync(text, source, target) {
+const key = JSON.stringify([LLM.cacheScope(), source, target, text]);
+if (cache.has(key)) return cache.get(key);
+const result = await Persistence.getCacheEntry(key);
+if (result !== undefined) cache.set(key, result);
+return result;
+}
+let batchReads = 0;
+async function getFromCacheBatch(texts, source, target) {
+batchReads++;
+const result = new Map(), missing = new Map();
+for (const text of new Set(texts)) {
+const key = JSON.stringify([LLM.cacheScope(), source, target, text]);
+if (cache.has(key)) result.set(text, cache.get(key)); else missing.set(text, key);
+}
+const stored = await Persistence.getCacheEntries([...missing.values()]);
+for (const [text, key] of missing) if (stored.has(key)) { result.set(text, stored.get(key)); cache.set(key, stored.get(key)); }
+return result;
+}
+</script>
+<script src="../js/persistence.js?v=quality-v5"></script>
+<script src="../js/quality.js?v=quality-v5"></script>
+<script src="../js/epub-order.js?v=context-v6"></script>
+<script src="../js/llm.js?v=context-v6"></script>
+<script src="../js/preview.js?v=validated-v4"></script>
+<script src="../js/terms.js?v=terms-v7"></script>
+<script src="../js/blocks.js?v=page-anchors-v1"></script>
+<script src="llm-tests.js?v=terms-v7"></script>
+</body></html>

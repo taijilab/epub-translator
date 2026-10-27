@@ -6,8 +6,14 @@
     <title>EPUB 翻译工具</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="js/persistence.js"></script>
-    <script src="js/app.js"></script>
+    <script src="js/persistence.js?v=quality-v5"></script>
+    <script src="js/epub-order.js?v=context-v6"></script>
+    <script src="js/app.js?v=terms-v7"></script>
+    <script src="js/quality.js?v=quality-v5"></script>
+    <script src="js/llm.js?v=context-v6"></script>
+    <script src="js/preview.js?v=validated-v4"></script>
+    <script src="js/terms.js?v=terms-v7"></script>
+    <script src="js/blocks.js?v=page-anchors-v1"></script>
     <style>
         .drop-zone.drag-over {
             border-color: #3b82f6;
@@ -334,10 +340,71 @@
                         <label class="block text-sm font-medium text-gray-700 mb-2">选择翻译服务</label>
                         <select id="translationService" class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                             <option value="demo">演示模式（简单替换，不调用真实翻译）</option>
+                            <option value="google">Google 翻译（免费，无需 Key）</option>
                             <option value="zhipu">智谱AI (GLM-4)</option>
                             <option value="openrouter">OpenRouter (DeepSeek)</option>
+                            <option value="kimi">Kimi（开放平台 API）</option>
+                            <option value="taotoken">TaoToken（OpenAI 兼容）</option>
                             <option value="custom">自定义翻译 API</option>
                         </select>
+                    </div>
+                    <div id="taotokenApiSettings" class="hidden space-y-4">
+                        <label class="block text-sm font-medium text-gray-700">TaoToken API Key
+                            <input id="taotokenApiKey" type="password" autocomplete="off" class="w-full border border-gray-300 rounded-lg p-3" placeholder="TaoToken 控制台创建的 Key">
+                        </label>
+                        <label class="block text-sm font-medium text-gray-700">计费入口
+                            <select id="taotokenBaseUrl" class="w-full border border-gray-300 rounded-lg p-3">
+                                <option value="">请选择你的计费方式</option>
+                                <option value="https://api.taotoken.net/v1">按量付费</option>
+                                <option value="https://api.taotoken.net/token/v1">Token Plan</option>
+                                <option value="https://api.taotoken.net/coding/v1">Coding Plan</option>
+                            </select>
+                        </label>
+                        <label class="block text-sm font-medium text-gray-700">Model ID
+                            <input id="taotokenModel" class="w-full border border-gray-300 rounded-lg p-3" placeholder="套餐或模型广场中的真实 Model ID">
+                        </label>
+                        <button id="taotokenTestBtn" type="button" class="border border-gray-300 rounded-lg px-4 py-2">测试 TaoToken 连接</button>
+                        <span id="taotokenTestStatus" role="status" class="text-sm"></span>
+                    </div>
+                    <div id="kimiApiSettings" class="hidden space-y-4">
+                        <label class="block text-sm font-medium text-gray-700">Kimi API Key
+                            <input id="kimiApiKey" type="password" autocomplete="off" class="w-full border border-gray-300 rounded-lg p-3" placeholder="开放平台 API Key">
+                        </label>
+                        <label class="block text-sm font-medium text-gray-700">Base URL
+                            <input id="kimiBaseUrl" type="url" value="https://api.moonshot.cn/v1" class="w-full border border-gray-300 rounded-lg p-3">
+                        </label>
+                        <label class="block text-sm font-medium text-gray-700">模型
+                            <input id="kimiModel" value="kimi-k2.6" class="w-full border border-gray-300 rounded-lg p-3" list="kimiModels">
+                            <datalist id="kimiModels"></datalist>
+                        </label>
+                        <button id="kimiTestBtn" type="button" class="border border-gray-300 rounded-lg px-4 py-2">测试连接</button>
+                        <span id="kimiTestStatus" role="status" class="text-sm"></span>
+                    </div>
+                    <label class="block text-sm font-medium text-gray-700">API 并发请求数
+                        <input id="apiConcurrency" type="number" min="1" max="10" value="3" class="w-24 border border-gray-300 rounded-lg p-2 ml-2">
+                    </label>
+                    <div class="flex flex-wrap gap-4">
+                        <label class="block text-sm font-medium text-gray-700">片段最多重试
+                            <input id="apiRetryLimit" type="number" min="0" max="5" value="2" class="w-24 border border-gray-300 rounded-lg p-2 ml-2">
+                        </label>
+                        <label class="block text-sm font-medium text-gray-700">每书重试请求上限
+                            <input id="apiRepairBudget" type="number" min="0" max="1000" value="32" class="w-24 border border-gray-300 rounded-lg p-2 ml-2">
+                        </label>
+                        <label class="block text-sm font-medium text-gray-700">每书重试 Token 预算（预估）
+                            <input id="apiRepairTokens" type="number" min="0" max="10000000" step="1000" value="128000" class="w-32 border border-gray-300 rounded-lg p-2 ml-2">
+                        </label>
+                    </div>
+                    <div id="translationReport" class="hidden border-t border-gray-200 pt-4" aria-live="polite">
+                        <p id="translationReportSummary" class="text-sm text-red-700"></p>
+                        <button id="downloadFailureReport" type="button" class="border border-gray-300 rounded-lg px-4 py-2 mt-2">导出失败及待审校报告</button>
+                        <ul id="translationFailureList" class="text-sm mt-2 max-h-48 overflow-auto"></ul>
+                        <div class="flex flex-wrap items-center gap-3 mt-2 text-sm"><button id="reportPrevious" type="button" class="border rounded px-3 py-1 disabled:opacity-40">上一页</button><span id="reportPage"></span><button id="reportNext" type="button" class="border rounded px-3 py-1 disabled:opacity-40">下一页</button></div>
+                    </div>
+                    <div id="googleApiSettings" class="hidden">
+                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                            <p class="text-sm text-blue-800 font-medium">Google 免费翻译接口</p>
+                            <p class="text-xs text-blue-700 mt-1">无需 API Key，适合快速试用。该接口为非官方免费端点，可能受网络、CORS 或频率限制影响。</p>
+                        </div>
                     </div>
                     <div id="customApiSettings" class="hidden space-y-4">
                         <div>
@@ -386,6 +453,46 @@
                 </div>
             </div>
 
+            <section id="namedTermsPanel" class="hidden mb-8 border-t border-gray-200 pt-4">
+                <h3 class="text-lg font-semibold text-gray-700 mb-3">专有名词手册</h3>
+                <div class="flex flex-wrap items-center gap-3 mb-3">
+                    <select id="termsBook" aria-label="手册书籍" class="border border-gray-300 rounded p-2 max-w-full"></select>
+                    <select id="termsCategory" aria-label="术语分类" class="border border-gray-300 rounded p-2">
+                        <option value="">全部分类</option><option>人名</option><option>公司名</option><option>产品名</option><option>地名</option><option>技术术语</option>
+                    </select>
+                    <input id="termsSearch" type="search" aria-label="查找术语" placeholder="查找原文或译文" class="border border-gray-300 rounded p-2">
+                    <select id="termsStatus" aria-label="术语状态" class="border border-gray-300 rounded p-2"><option value="">全部状态</option><option>候选</option><option>冲突</option><option>已确认</option></select>
+                    <button id="termsNew" type="button" class="border border-gray-300 rounded px-3 py-2">新增术语</button>
+                    <button id="termsImport" type="button" class="border border-gray-300 rounded px-3 py-2">导入 JSON 手册</button>
+                    <input id="termsImportFile" type="file" accept=".json,application/json" class="hidden">
+                    <button id="termsDownload" type="button" class="border border-gray-300 rounded px-3 py-2">下载手册</button>
+                    <button id="termsDownloadJson" type="button" class="border border-gray-300 rounded px-3 py-2">导出 JSON</button>
+                </div>
+                <p id="termsSummary" role="status" class="text-sm text-gray-600 mb-2"></p>
+                <p id="termsImportStatus" role="status" class="text-sm text-gray-700 mb-2 break-words"></p>
+                <div class="overflow-auto max-h-80">
+                    <table class="w-full text-sm text-left"><thead><tr class="border-b"><th class="p-2">分类</th><th class="p-2">原文</th><th class="p-2">译文</th><th class="p-2">状态</th><th class="p-2">出现章节</th><th class="p-2">操作</th></tr></thead><tbody id="termsRows"></tbody></table>
+                </div>
+                <div class="flex gap-3 mt-2"><button id="termsPrevious" type="button" class="border rounded px-3 py-1">上一页</button><button id="termsNext" type="button" class="border rounded px-3 py-1">下一页</button></div>
+            </section>
+            <dialog id="termEditor" class="rounded-lg p-5 w-full max-w-lg border shadow-lg">
+                <h3 class="font-semibold text-lg mb-4">编辑术语</h3>
+                <label class="block mb-3">分类<select id="termCategory" class="block border rounded p-2 w-full mt-1"><option>人名</option><option>公司名</option><option>产品名</option><option>地名</option><option>技术术语</option></select></label>
+                <label class="block mb-3">原文<input id="termSource" class="block border rounded p-2 w-full mt-1"></label>
+                <label class="block mb-3">标准译文<input id="termTarget" class="block border rounded p-2 w-full mt-1"></label>
+                <label class="block mb-3">简称与译名（每行：原文=译文）<textarea id="termAliases" rows="3" class="block border rounded p-2 w-full mt-1"></textarea></label>
+                <label class="flex items-center gap-2 mb-3"><input id="termConfirmed" type="checkbox">确认用于后续翻译</label>
+                <p id="termEditorError" role="alert" class="text-red-700 text-sm mb-3"></p>
+                <div class="flex flex-wrap justify-end gap-3"><button id="termUnconfirm" type="button" class="border rounded px-4 py-2 disabled:opacity-40">取消确认</button><button id="termCancel" type="button" class="border rounded px-4 py-2">取消</button><button id="termSave" type="button" class="bg-blue-600 text-white rounded px-4 py-2">保存译名</button></div>
+            </dialog>
+            <dialog id="termsImporter" class="rounded-lg p-5 w-full max-w-2xl border shadow-lg">
+                <h3 class="font-semibold text-lg mb-3">导入专有名词手册</h3>
+                <p id="termsImportSummary" class="text-sm mb-3 break-words"></p>
+                <div class="overflow-auto max-h-64 mb-3"><table class="w-full text-sm text-left"><thead><tr><th class="p-2">分类</th><th class="p-2">原文</th><th class="p-2">译文</th></tr></thead><tbody id="termsImportRows"></tbody></table></div>
+                <label class="flex items-center gap-2 mb-3"><input id="termsImportConfirmed" type="checkbox">启用文件中已确认译名（保留已有确认）</label>
+                <p id="termsImportError" role="alert" class="text-red-700 text-sm mb-3"></p>
+                <div class="flex justify-end gap-3"><button id="termsImportCancel" type="button" class="border rounded px-4 py-2">取消</button><button id="termsImportApply" type="button" class="bg-blue-600 text-white rounded px-4 py-2">合并导入</button></div>
+            </dialog>
             <!-- Translate Button -->
             <div class="mb-8">
                 <div class="flex gap-4">
@@ -489,6 +596,7 @@
                 <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
                     <div class="bg-gray-100 px-4 py-2 flex items-center justify-between border-b border-gray-200">
                         <h4 class="text-sm font-semibold text-gray-700">翻译日志</h4>
+                        <button id="refreshLogBtn" type="button" class="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium py-1 px-3 rounded" title="显示最新日志">刷新日志</button>
                         <button id="copyLogBtn" class="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium py-1 px-3 rounded transition-colors flex items-center">
                             <svg class="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
@@ -508,8 +616,8 @@
                     <svg class="mx-auto h-16 w-16 text-green-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                     </svg>
-                    <h3 class="text-lg font-semibold text-green-800 mb-2">翻译完成！</h3>
-                    <p class="text-green-600 mb-2">您的 EPUB 文件已成功翻译</p>
+                    <h3 id="singleCompletionTitle" class="text-lg font-semibold text-green-800 mb-2">处理结果</h3>
+                    <p id="singleCompletionDetail" class="text-green-600 mb-2"></p>
                     <p class="text-sm text-green-700 mb-4">⚠️ 原始文件保持不变，将生成新的翻译后文件</p>
 
                     <div class="flex justify-center gap-4">
@@ -540,8 +648,8 @@
                             <svg class="mx-auto h-16 w-16 text-green-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                             </svg>
-                            <h3 class="text-lg font-semibold text-green-800 mb-2">批量翻译完成！</h3>
-                            <p class="text-green-600">所有 EPUB 文件已成功翻译</p>
+                            <h3 id="batchCompletionTitle" class="text-lg font-semibold text-green-800 mb-2">批量处理结果</h3>
+                            <p id="batchCompletionDetail" class="text-green-600"></p>
                         </div>
 
                         <!-- 翻译结果列表 -->
@@ -566,7 +674,7 @@
 
                 <!-- Preview Modal -->
                 <div id="previewModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-                    <div class="bg-white rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+                    <div class="bg-white rounded-lg shadow-2xl max-w-4xl w-full h-[85vh] max-h-[90vh] flex flex-col">
                         <div class="flex items-center justify-between p-4 border-b">
                             <h3 class="text-lg font-semibold text-gray-800">EPUB 翻译预览</h3>
                             <button id="closePreview" class="text-gray-400 hover:text-gray-600">
@@ -575,9 +683,9 @@
                                 </svg>
                             </button>
                         </div>
-                        <div class="flex-1 overflow-y-auto p-6 bg-gray-50">
+                        <div class="flex-1 min-h-0 overflow-hidden p-4 bg-gray-50">
                             <!-- 使用安全的 iframe 预览 -->
-                            <iframe id="previewContent" class="w-full h-full border-0"></iframe>
+                            <iframe id="previewContent" title="翻译正文" sandbox="" class="w-full h-full border-0 bg-white"></iframe>
                         </div>
                         <div class="flex items-center justify-between p-4 border-t bg-gray-100">
                             <span id="previewInfo" class="text-sm text-gray-600"></span>

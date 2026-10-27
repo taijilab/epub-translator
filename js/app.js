@@ -37,7 +37,8 @@ return hash.toString(36);
 
 // 缓存键生成函数
 function getCacheKey(text, sourceLang, targetLang) {
-return `${sourceLang}-${targetLang}-${text.length}-${fnv1aHash(text)}`;
+const scope = window.LLM ? window.LLM.cacheScope() : 'legacy-v2';
+return `${scope}-${sourceLang}-${targetLang}-${text.length}-${fnv1aHash(text)}`;
 }
 
 // 添加到缓存（同时异步写入 IndexedDB）
@@ -59,6 +60,32 @@ window.Persistence.enqueueCacheWrite(key, result);
 function getFromCache(text, sourceLang, targetLang) {
 const key = getCacheKey(text, sourceLang, targetLang);
 return translationCache.get(key);
+}
+
+async function getFromCacheAsync(text, sourceLang, targetLang) {
+const key = getCacheKey(text, sourceLang, targetLang);
+if (translationCache.has(key)) return translationCache.get(key);
+const value = await window.Persistence?.getCacheEntry(key);
+if (value !== undefined) {
+if (translationCache.size >= MAX_CACHE_SIZE) translationCache.delete(translationCache.keys().next().value);
+translationCache.set(key, value);
+}
+return value;
+}
+
+async function getFromCacheBatch(texts, sourceLang, targetLang) {
+const values = new Map(), missing = new Map();
+for (const text of new Set(texts)) {
+const key = getCacheKey(text, sourceLang, targetLang);
+if (translationCache.has(key)) values.set(text, translationCache.get(key));
+else missing.set(text, key);
+}
+const stored = await window.Persistence?.getCacheEntries([...missing.values()]) || new Map();
+for (const [text, key] of missing) if (stored.has(key)) {
+if (translationCache.size >= MAX_CACHE_SIZE) translationCache.delete(translationCache.keys().next().value);
+const value = stored.get(key); translationCache.set(key, value); values.set(text, value);
+}
+return values;
 }
 
 // ============================================================
@@ -100,9 +127,9 @@ if (!window.Persistence || !currentFileId) return;
 const data = {
 fileName: epubFile?.name || 'unknown',
 fileSize: epubFile?.size || 0,
-status: status || 'in_progress', // in_progress | completed | cancelled | failed
+status: status === 'completed' && window.LLM?.failureCount() ? 'partial' : (status || 'in_progress'),
 totalChars: totalCharsToTranslate,
-translatedChars,
+translatedChars: Math.min(totalCharsToTranslate, window.LLM?.supports(translationService?.value) ? totalSourceChars : translatedChars),
 inputTokens: totalInputTokens,
 outputTokens: totalOutputTokens,
 sourceLang: document.getElementById('sourceLang')?.value,
@@ -133,6 +160,7 @@ if (queue.length > 0) queue.shift()();
 };
 }
 const translationSemaphore = createSemaphore(30); // 最大30个并发API请求
+const googleTranslationSemaphore = createSemaphore(3); // 免费接口全局限流，避免批量翻译触发频率限制
 
 // 全局语言名称映射（替代文件中多处局部定义）
 const LANG_NAMES = {
@@ -142,6 +170,10 @@ const LANG_NAMES = {
 const LANG_CODES = {
 'en': 'EN', 'zh': 'ZH', 'ja': 'JA', 'ko': 'KO',
 'fr': 'FR', 'es': 'ES', 'de': 'DE', 'ru': 'RU', 'pt': 'PT'
+};
+const GOOGLE_LANG_CODES = {
+'en': 'en', 'zh': 'zh-CN', 'ja': 'ja', 'ko': 'ko',
+'fr': 'fr', 'es': 'es', 'de': 'de', 'ru': 'ru', 'pt': 'pt'
 };
 
 // 块级元素集合（Set.has() 为 O(1)，替代多处 Array.includes() O(n) 查找）
@@ -416,6 +448,7 @@ const statusConfig = {
 'pending': { icon: '⏳', color: 'text-gray-600', bg: 'bg-gray-100', text: '待处理' },
 'processing': { icon: '⏳', color: 'text-blue-600', bg: 'bg-blue-100', text: '处理中' },
 'completed': { icon: '✓', color: 'text-green-600', bg: 'bg-green-100', text: '已完成' },
+'partial': { icon: '!', color: 'text-amber-700', bg: 'bg-amber-100', text: '部分失败（保留原文）' },
 'failed': { icon: '✗', color: 'text-red-600', bg: 'bg-red-100', text: '失败' }
 };
 
@@ -567,6 +600,14 @@ openrouterApiKey: document.getElementById('openrouterApiKey')?.value || '',
 openrouterModel: document.getElementById('openrouterModel')?.value || 'deepseek/deepseek-chat',
 customEndpoint: document.getElementById('apiEndpoint')?.value || '',
 customApiKey: document.getElementById('apiKey')?.value || '',
+kimiBaseUrl: document.getElementById('kimiBaseUrl')?.value,
+kimiModel: document.getElementById('kimiModel')?.value,
+taotokenBaseUrl: document.getElementById('taotokenBaseUrl')?.value,
+taotokenModel: document.getElementById('taotokenModel')?.value,
+apiConcurrency: document.getElementById('apiConcurrency')?.value,
+apiRetryLimit: document.getElementById('apiRetryLimit')?.value,
+apiRepairBudget: document.getElementById('apiRepairBudget')?.value,
+apiRepairTokens: document.getElementById('apiRepairTokens')?.value,
 translationMode: getTranslationMode(),
 customGlossary: document.getElementById('customGlossary')?.value || ''
 };
@@ -578,6 +619,9 @@ try {
 const saved = localStorage.getItem(STORAGE_KEY);
 if (saved) {
 const config = JSON.parse(saved);
+for (const id of ['kimiBaseUrl', 'kimiModel', 'taotokenBaseUrl', 'taotokenModel', 'apiConcurrency', 'apiRetryLimit', 'apiRepairBudget', 'apiRepairTokens']) {
+if (config[id] && document.getElementById(id)) document.getElementById(id).value = config[id];
+}
 
 // 恢复源语言选择
 if (config.sourceLang) {
@@ -673,7 +717,10 @@ if (downloadAllBtn) {
 downloadAllBtn.addEventListener('click', handleDownload);
 }
 
-translationService.addEventListener('change', handleServiceChange);
+translationService.addEventListener('change', () => {
+handleServiceChange();
+saveConfig();
+});
 
 // 绑定恢复翻译横幅按钮
 const resumeContinueBtn = document.getElementById('resumeContinueBtn');
@@ -689,10 +736,22 @@ resumeDiscardBtn.addEventListener('click', discardSavedProgress);
 }
 
 // 绑定复制日志按钮
+document.querySelectorAll('input[type="password"]').forEach(input => {
+const label = document.createElement('label');
+label.className = 'flex items-center gap-2 mt-2 text-sm text-gray-600';
+const toggle = document.createElement('input');
+toggle.type = 'checkbox';
+toggle.setAttribute('aria-controls', input.id);
+toggle.addEventListener('change', () => { input.type = toggle.checked ? 'text' : 'password'; });
+label.append(toggle, document.createTextNode('显示密钥'));
+(input.closest('label') || input).insertAdjacentElement('afterend', label);
+});
+document.getElementById('refreshLogBtn')?.addEventListener('click', flushLogs);
 const copyLogBtn = document.getElementById('copyLogBtn');
 if (copyLogBtn) {
 copyLogBtn.addEventListener('click', function() {
-const logContent = progressLog.textContent || progressLog.innerText;
+flushLogs();
+const logContent = [...progressLog.children].map(entry => entry.textContent).join('\n');
 if (logContent.trim()) {
 // 使用 Clipboard API 复制
 navigator.clipboard.writeText(logContent).then(function() {
@@ -808,9 +867,9 @@ addLog('文件列表已清空');
 }
 
 // 更新对比窗口（带节流优化）
-function updateComparisonWindow(original, translated) {
+function updateComparisonWindow(original, translated, force = false) {
 const now = Date.now();
-if (now - lastUpdateTime < UI_UPDATE_THROTTLE) {
+if (!force && now - lastUpdateTime < UI_UPDATE_THROTTLE) {
 return; // 跳过过于频繁的更新
 }
 lastUpdateTime = now;
@@ -877,6 +936,9 @@ mergedFiles.push(newFile);
 });
 
 fileListData = mergedFiles;
+const termSource = document.querySelector('input[name="sourceLang"]:checked')?.value || 'en';
+const termTarget = document.querySelector('input[name="targetLang"]:checked')?.value || 'zh';
+for (const file of files) window.NamedTerms?.prepare(file.name, termSource, termTarget);
 
 // 如果是第一个文件，解析它并分析内容
 if (fileListData.length === 1 && fileListData[0].fileObject) {
@@ -944,12 +1006,12 @@ fileZips.push(zip);
 const allFileNames = Object.keys(zip.files);
 for (const filename of allFileNames) {
 const zipFile = zip.files[filename];
-if (!zipFile.dir && (filename.endsWith('.html') || filename.endsWith('.xhtml'))) {
+if (!zipFile.dir && window.EpubOrder.isContent(filename)) {
 const content = await zipFile.async('string');
 const parser = new DOMParser();
 const doc = parser.parseFromString(content, 'text/html');
 const text = doc.body.textContent || '';
-totalCharsToTranslate += text.trim().replace(/\s+/g, '').length;
+totalCharsToTranslate += window.LLM?.supports(service) ? window.LLM.countContent(doc) : text.trim().replace(/\s+/g, '').length;
 }
 }
 }
@@ -963,7 +1025,7 @@ let completedCount = 0;
 
 const filePromises = files.map((file, i) => {
 return epubSemaphore(async () => {
-if (shouldCancel) return;
+if (shouldCancel || window.LLM?.stopped()) return;
 
 // 更新批量处理计数器
 if (batchInfo) {
@@ -985,7 +1047,7 @@ const otherFiles = [];
 for (const filename of allFiles) {
 const zipFile = zip.files[filename];
 if (!zipFile.dir) {
-if (filename.endsWith('.html') || filename.endsWith('.xhtml')) {
+if (window.EpubOrder.isContent(filename)) {
 htmlFiles.push(filename);
 } else {
 otherFiles.push(filename);
@@ -998,24 +1060,24 @@ addLog(`  -> ${file.name}: ${htmlFiles.length} 个HTML文件, ${otherFiles.lengt
 // 创建翻译后的zip
 const translatedZip = new JSZip();
 
-// 并发翻译HTML文件
-const htmlPromises = htmlFiles.map(async (filename) => {
-const content = await zip.files[filename].async('string');
-const translatedText = await translateText(content, sourceLang, targetLang, service);
+// 按阅读顺序加载章节，章内请求仍由共享并发上限控制。
+const htmlTask = window.EpubOrder.run(zip, htmlFiles, async (filename, content, readingOrder, readingSession) => {
+addLog(`${file.name}: 阅读章节 ${readingOrder + 1}/${htmlFiles.length} ${filename}`);
+const translatedText = await translateText(content, sourceLang, targetLang, service, { file: file.name, chapter: filename, readingOrder, readingSession });
 
 // 更新全局进度
 const parser = new DOMParser();
 const doc = parser.parseFromString(content, 'text/html');
 const text = doc.body.textContent || '';
-const charCount = text.trim().replace(/\s+/g, '').length;
+const charCount = window.LLM?.supports(service) ? window.LLM.countContent(doc) : text.trim().replace(/\s+/g, '').length;
 translatedChars += charCount;
 
 const progress = totalCharsToTranslate > 0 ? Math.round((translatedChars / totalCharsToTranslate) * 100) : 0;
 updateProgress(`翻译中... ${translatedChars.toLocaleString()}/${totalCharsToTranslate.toLocaleString()} 字 (${progress}%)`, progress);
 updateTokenDisplay();
 
-return { filename, translatedText };
-});
+return translatedText;
+}, { shouldStop: () => shouldCancel || window.LLM?.stopped(), onOrder: plan => addLog(`${file.name}: ${plan.spine ? '按 spine 阅读顺序调度' : plan.warning}`) });
 
 // 同时处理非HTML文件
 const otherPromises = otherFiles.map(async (filename) => {
@@ -1048,7 +1110,7 @@ return { filename, content: content, isText: false };
 
 // 等待所有文件处理完成
 const [htmlResults, otherResults] = await Promise.all([
-Promise.all(htmlPromises),
+htmlTask,
 Promise.all(otherPromises)
 ]);
 
@@ -1066,7 +1128,7 @@ translatedEpub: translatedZip,
 fileName: file.name
 });
 completedCount++;
-updateFileStatus(i, 'completed');
+updateFileStatus(i, window.LLM?.failureCount(file.name) ? 'partial' : 'completed');
 addLog(`  -> ✓ ${file.name} 处理完成`);
 
 } catch (error) {
@@ -1078,7 +1140,7 @@ addLog(`  -> ✗ ${file.name} 处理失败: ${error.message}`, true);
 
 await Promise.all(filePromises);
 
-addLog(`✓ 批量处理完成！共处理 ${translatedEpubList.length} 个文件`);
+addLog(`${window.LLM?.completionText() || '批量处理完成'}，共处理 ${translatedEpubList.length} 个文件`);
 
 // 渲染翻译结果列表
 renderTranslatedFileList();
@@ -1309,7 +1371,7 @@ const content = await file.async('string');
 const parser = new DOMParser();
 const doc = parser.parseFromString(content, 'text/html');
 const text = doc.body.textContent || '';
-const charCount = text.trim().replace(/\s+/g, '').length;
+const charCount = window.LLM?.supports(service) ? window.LLM.countContent(doc) : text.trim().replace(/\s+/g, '').length;
 totalCharsToTranslate += charCount;
 }
 }
@@ -1341,13 +1403,13 @@ updateProgress(`正在翻译: ${filename}`, (translatedChars / totalCharsToTrans
 addLog(`处理文件: ${filename}`);
 
 const textContent = new TextDecoder().decode(content);
-const translatedText = await translateText(textContent, sourceLang, targetLang, service);
+const translatedText = await translateText(textContent, sourceLang, targetLang, service, { file: epubFile?.name, chapter: filename });
 
 // 更新已翻译字数
 const parser = new DOMParser();
 const doc = parser.parseFromString(textContent, 'text/html');
 const text = doc.body.textContent || '';
-const charCount = text.trim().replace(/\s+/g, '').length;
+const charCount = window.LLM?.supports(service) ? window.LLM.countContent(doc) : text.trim().replace(/\s+/g, '').length;
 translatedChars += charCount;
 updateTokenDisplay();
 
@@ -1473,8 +1535,8 @@ await translatedEpub.file(filename, content);
 processedFiles++;
 }
 
-updateProgress('完成', 100);
-addLog('✓ 翻译完成！');
+updateProgress(window.LLM?.completionText() || '完成', 100);
+addLog(window.LLM?.completionText() || '翻译完成');
 
 // 持久化最终进度
 persistCurrentProgress('completed');
@@ -1583,7 +1645,7 @@ let charCount = { zh: 0, ja: 0, en: 0, other: 0 };
 const files = Object.keys(epubZip.files);
 
 for (const filename of files) {
-if (filename.endsWith('.html') || filename.endsWith('.xhtml')) {
+if (window.EpubOrder.isContent(filename)) {
 textFileCount++;
 const file = epubZip.files[filename];
 if (!file.dir) {
@@ -1667,6 +1729,10 @@ addLog(`自动检测源语言: 英语 (${charCount.en.toLocaleString()} 个英�
 } else {
 detectedSourceLangCode = null; // 无法确定
 }
+
+const termsSourceLang = document.querySelector('input[name="sourceLang"]:checked')?.value || 'en';
+const termsTargetLang = document.querySelector('input[name="targetLang"]:checked')?.value || 'zh';
+for (const selectedFile of fileListData) window.NamedTerms?.prepare(selectedFile.name, termsSourceLang, termsTargetLang);
 
 addLog(`文件分析: ${displayCount.toLocaleString()} ${displayUnit}, ${textFileCount} 个HTML文件, 主要语言: ${detectedLang}`);
 
@@ -1927,8 +1993,11 @@ console.error('检测竖排格式时出错:', error);
 }
 
 function handleServiceChange() {
+document.getElementById('kimiApiSettings')?.classList.toggle('hidden', translationService.value !== 'kimi');
+document.getElementById('taotokenApiSettings')?.classList.toggle('hidden', translationService.value !== 'taotoken');
 const zhipuApiSettings = document.getElementById('zhipuApiSettings');
 const openrouterApiSettings = document.getElementById('openrouterApiSettings');
+const googleApiSettings = document.getElementById('googleApiSettings');
 
 // Hide all settings first
 customApiSettings.classList.add('hidden');
@@ -1938,6 +2007,9 @@ zhipuApiSettings.classList.add('hidden');
 if (openrouterApiSettings) {
 openrouterApiSettings.classList.add('hidden');
 }
+if (googleApiSettings) {
+googleApiSettings.classList.add('hidden');
+}
 
 // Show relevant settings based on selection
 if (translationService.value === 'custom') {
@@ -1946,6 +2018,8 @@ customApiSettings.classList.remove('hidden');
 zhipuApiSettings.classList.remove('hidden');
 } else if (translationService.value === 'openrouter') {
 openrouterApiSettings.classList.remove('hidden');
+} else if (translationService.value === 'google' && googleApiSettings) {
+googleApiSettings.classList.remove('hidden');
 }
 }
 
@@ -1992,23 +2066,31 @@ const total = totalInputTokens + totalOutputTokens;
 // DeepSeek定价: 约$0.14每百万tokens
 const estimatedCost = (total / 1000000 * 0.14).toFixed(4);
 document.getElementById('estimatedCost').textContent = `$${estimatedCost}`;
+if (['kimi', 'taotoken'].includes(translationService?.value)) document.getElementById('estimatedCost').textContent = '以平台账单为准';
+const cost = window.LLM?.costSummary();
+if (cost) {
+const element = document.getElementById('estimatedCost');
+element.textContent = `约 ¥${cost.yuan.toFixed(4)}`;
+element.title = `${cost.plan}：按人民币公布费率估算${cost.estimatedUsage ? '，部分 Token 为估算值' : ''}；套餐额度和实际扣费以平台账单为准`;
+}
 
 // 计算已翻译字数和进度
 let currentTranslated = 0;
 let currentTotal = totalCharsToTranslate;
+const detailedProgress = window.LLM?.supports(translationService?.value);
+currentTranslated = detailedProgress ? totalSourceChars : (isBatchMode ? translatedChars : totalSourceChars);
+currentTranslated = Math.min(currentTotal, Math.max(0, currentTranslated));
 
 if (isBatchMode && totalCharsToTranslate > 0) {
-currentTranslated = translatedChars;
-const progress = Math.round((translatedChars / totalCharsToTranslate) * 100);
+const progress = Math.round((currentTranslated / totalCharsToTranslate) * 100);
 const progressElement = document.getElementById('translationProgress');
 if (progressElement) {
 progressElement.textContent =
-`${translatedChars.toLocaleString()} / ${totalCharsToTranslate.toLocaleString()} 字 (${progress}%)`;
+`${currentTranslated.toLocaleString()} / ${totalCharsToTranslate.toLocaleString()} 字 (${progress}%)`;
 }
 } else if (totalCharsToTranslate > 0) {
-currentTranslated = totalSourceChars;
 document.getElementById('translationProgress').textContent =
-`${totalSourceChars.toLocaleString()} / ${totalCharsToTranslate.toLocaleString()} 字`;
+`${currentTranslated.toLocaleString()} / ${totalCharsToTranslate.toLocaleString()} 字`;
 }
 
 // 更新翻译时长
@@ -2017,7 +2099,7 @@ if (translationStartTime && isTranslating) {
 elapsedSeconds = (Date.now() - translationStartTime) / 1000;
 document.getElementById('translationTime').textContent = formatDuration(elapsedSeconds);
 } else if (translationStartTime && !isTranslating) {
-elapsedSeconds = (translationEndTime - translationStartTime) / 1000;
+elapsedSeconds = ((translationEndTime || Date.now()) - translationStartTime) / 1000;
 document.getElementById('translationTime').textContent = formatDuration(elapsedSeconds);
 }
 
@@ -2030,16 +2112,9 @@ persistCurrentProgress('in_progress');
 // 预估剩余时间
 const remainingEl = document.getElementById('estimatedRemaining');
 if (remainingEl) {
-if (isTranslating && currentTranslated > 0 && currentTotal > 0 && elapsedSeconds > 3) {
-const charsPerSecond = currentTranslated / elapsedSeconds;
-const remainingChars = currentTotal - currentTranslated;
-const remainingSeconds = remainingChars / charsPerSecond;
-remainingEl.textContent = remainingSeconds < 1 ? '即将完成' : formatDuration(remainingSeconds);
-} else if (!isTranslating && translationStartTime) {
-remainingEl.textContent = '已完成';
-} else {
-remainingEl.textContent = '计算中...';
-}
+const snapshot = window.LLM?.progressSnapshot(currentTranslated, currentTotal, elapsedSeconds, isTranslating || !translationStartTime, shouldCancel, window.LLM?.failureCount());
+const labels = { waiting: '计算中...', finishing: '正在收尾...', cancelled: '已取消', partial: '部分失败', incomplete: '未完成', complete: '已完成' };
+remainingEl.textContent = snapshot?.state === 'running' ? `约 ${formatDuration(snapshot.seconds)}` : labels[snapshot?.state] || '计算中...';
 }
 }
 
@@ -2294,6 +2369,10 @@ async function handleTranslate() {
 const sourceLang = document.querySelector('input[name="sourceLang"]:checked').value;
 const targetLang = document.querySelector('input[name="targetLang"]:checked').value;
 const service = translationService.value;
+if (window.LLM) {
+try { window.LLM.begin(service, sourceLang, targetLang); }
+catch (error) { alert(error.message); return; }
+}
 
 // 特殊处理：中文转中文（只做格式转换，不翻译）
 if (sourceLang === 'zh' && targetLang === 'zh') {
@@ -2435,7 +2514,7 @@ addLog('正在统计文件字数...');
 const files = Object.keys(epubZip.files);
 
 for (const filename of files) {
-if (filename.endsWith('.html') || filename.endsWith('.xhtml')) {
+if (window.EpubOrder.isContent(filename)) {
 const file = epubZip.files[filename];
 if (!file.dir) {
 const content = await file.async('string');
@@ -2443,7 +2522,7 @@ const parser = new DOMParser();
 const doc = parser.parseFromString(content, 'text/html');
 const text = doc.body.textContent || '';
 const words = text.trim().replace(/\s+/g, '');
-totalCharsToTranslate += words.length;
+totalCharsToTranslate += window.LLM?.supports(service) ? window.LLM.countContent(doc) : words.length;
 }
 }
 }
@@ -2459,7 +2538,7 @@ const otherFiles = [];
 for (const filename of files) {
 const file = epubZip.files[filename];
 if (!file.dir) {
-if (filename.endsWith('.html') || filename.endsWith('.xhtml')) {
+if (window.EpubOrder.isContent(filename)) {
 htmlFiles.push(filename);
 } else {
 otherFiles.push(filename);
@@ -2467,34 +2546,18 @@ otherFiles.push(filename);
 }
 }
 
-addLog(`文件分类: ${htmlFiles.length} 个HTML文件（将并发翻译），${otherFiles.length} 个其他文件`);
-
-// 预读取所有HTML文件内容（I/O与翻译并行）
-addLog('预读取HTML文件...');
-const htmlContents = new Map();
-await Promise.all(htmlFiles.map(async (filename) => {
-const file = epubZip.files[filename];
-const content = await file.async('string');
-htmlContents.set(filename, content);
-}));
-addLog(`预读取完成: ${htmlFiles.length} 个文件已载入内存`);
+addLog(`文件分类: ${htmlFiles.length} 个HTML文件（按阅读顺序调度），${otherFiles.length} 个其他文件`);
 
 // HTML翻译 与 非HTML文件处理 并行执行
-const htmlTranslationTask = (async () => {
-// 所有HTML文件同时提交，由translationSemaphore控制API并发
-const htmlPromises = htmlFiles.map(async (filename) => {
-if (shouldCancel) return { filename, translatedText: htmlContents.get(filename) };
-
-const textContent = htmlContents.get(filename);
-addLog(`处理文件: ${filename}`);
-
-const translatedText = await translateText(textContent, sourceLang, targetLang, service);
+const htmlTranslationTask = window.EpubOrder.run(epubZip, htmlFiles, async (filename, textContent, readingOrder, readingSession) => {
+addLog(`阅读章节 ${readingOrder + 1}/${htmlFiles.length}: ${filename}`);
+const translatedText = await translateText(textContent, sourceLang, targetLang, service, { file: epubFile?.name, chapter: filename, readingOrder, readingSession });
 
 // 更新已翻译字数
 const parser = new DOMParser();
 const doc = parser.parseFromString(textContent, 'text/html');
 const text = doc.body.textContent || '';
-const charCount = text.trim().replace(/\s+/g, '').length;
+const charCount = window.LLM?.supports(service) ? window.LLM.countContent(doc) : text.trim().replace(/\s+/g, '').length;
 translatedChars += charCount;
 updateTokenDisplay();
 
@@ -2502,11 +2565,8 @@ updateTokenDisplay();
 const progress = Math.round((translatedChars / totalCharsToTranslate) * 100);
 updateProgress(`翻译中... ${translatedChars.toLocaleString()}/${totalCharsToTranslate.toLocaleString()} 字 (${progress}%)`, progress);
 
-return { filename, translatedText };
-});
-
-return await Promise.all(htmlPromises);
-})();
+return translatedText;
+}, { shouldStop: () => shouldCancel || window.LLM?.stopped(), onOrder: plan => addLog(plan.spine ? '按 spine 阅读顺序调度；逐章加载，章内并发翻译' : plan.warning) });
 
 const otherFilesTask = (async () => {
 const results = [];
@@ -2549,6 +2609,7 @@ return results;
 const [htmlResults, otherResults] = await Promise.all([htmlTranslationTask, otherFilesTask]);
 
 if (shouldCancel) {
+isTranslating = false;
 stopTimeUpdate();
 addLog('⚠️ 翻译已取消', true);
 isTranslating = false;
@@ -2566,18 +2627,16 @@ for (const result of otherResults) {
 await translatedEpub.file(result.filename, result.content);
 }
 
-// 释放预读取内存
-htmlContents.clear();
 
-updateProgress('完成', 100);
-addLog('✓ 翻译完成！');
+updateProgress(window.LLM?.completionText() || '完成', 100);
+addLog(window.LLM?.completionText() || '翻译完成');
 
 // 持久化最终进度
 persistCurrentProgress('completed');
 
 // 更新文件列表状态（单文件模式）
 if (fileListData.length > 0) {
-	updateFileStatus(0, 'completed');
+	updateFileStatus(0, window.LLM?.failureCount() ? 'partial' : 'completed');
 }
 
 // Show download button
@@ -2589,6 +2648,7 @@ isTranslating = false;
 stopTimeUpdate(); // 停止实时时长更新
 
 } catch (error) {
+isTranslating = false;
 stopTimeUpdate(); // 停止实时时长更新
 addLog('翻译过程中出错: ' + error.message, true);
 // 持久化失败状态以便下次续传
@@ -2600,7 +2660,10 @@ isTranslating = false;
 }
 }
 
-async function translateText(text, sourceLang, targetLang, service) {
+async function translateText(text, sourceLang, targetLang, service, context = {}) {
+if (window.LLM && ['kimi', 'taotoken', 'zhipu', 'openrouter'].includes(service)) {
+return window.LLM.translate(text, sourceLang, targetLang, service, context);
+}
 if (service === 'demo') {
 // Demo mode: simple text replacement
 return demoTranslate(text, sourceLang, targetLang);
@@ -2610,9 +2673,12 @@ return await translateWithZhipuAI(text, sourceLang, targetLang);
 } else if (service === 'openrouter') {
 // OpenRouter API
 return await translateWithOpenRouter(text, sourceLang, targetLang);
+} else if (service === 'google') {
+// Google Translate free endpoint
+return await translateWithGoogleFree(text, sourceLang, targetLang);
 } else {
 // Custom API
-return await translateWithCustomAPI(text, sourceLang, targetLang);
+return window.LLM ? await window.LLM.legacy(() => translateWithCustomAPI(text, sourceLang, targetLang), { ...context, original: text }) : await translateWithCustomAPI(text, sourceLang, targetLang);
 }
 }
 
@@ -3200,7 +3266,7 @@ totalInputTokens += inputTokens;
 totalOutputTokens += outputTokens;
 
 // 统计原文和译文字数（用于显示）
-totalSourceChars += originalText.trim().length;
+totalSourceChars += originalText.replace(/\s+/g, '').length;
 totalTranslatedChars += translatedText.trim().length;
 
 updateTokenDisplay();
@@ -4008,7 +4074,7 @@ totalInputTokens += inputTokens;
 totalOutputTokens += outputTokens;
 
 // 统计原文和译文字数（用于显示）
-totalSourceChars += originalText.trim().length;
+totalSourceChars += originalText.replace(/\s+/g, '').length;
 totalTranslatedChars += translatedText.trim().length;
 
 updateTokenDisplay();
@@ -4422,11 +4488,167 @@ throw new Error(`API 请求失败: ${response.status}`);
 }
 
 const data = await response.json();
-return data.translated_text || text;
+if (typeof data.translated_text !== 'string' || !data.translated_text.trim()) throw new Error('API 未返回 translated_text');
+return data.translated_text;
 } catch (error) {
 addLog(`API 调用失败: ${error.message}`, true);
-return text; // Return original text on error
+throw error;
 }
+}
+
+async function translateWithGoogleFree(text, sourceLang, targetLang) {
+const sourceCode = GOOGLE_LANG_CODES[sourceLang] || sourceLang;
+const targetCode = GOOGLE_LANG_CODES[targetLang] || targetLang;
+const docTypeMatch = text.match(/<!DOCTYPE[^>]*>/i);
+const docType = docTypeMatch ? docTypeMatch[0] : '';
+const parser = new DOMParser();
+const doc = parser.parseFromString(text, 'text/html');
+const textNodes = [];
+const walker = document.createTreeWalker(
+doc.body || doc.documentElement,
+NodeFilter.SHOW_TEXT,
+{
+acceptNode(node) {
+const parent = node.parentElement;
+if (!parent) return NodeFilter.FILTER_REJECT;
+const tagName = parent.tagName?.toLowerCase();
+if (['script', 'style', 'noscript', 'code', 'pre'].includes(tagName)) {
+return NodeFilter.FILTER_REJECT;
+}
+return node.textContent.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+}
+},
+false
+);
+
+let node;
+while (node = walker.nextNode()) {
+textNodes.push(node);
+}
+
+if (textNodes.length === 0) {
+return text;
+}
+
+addLog(`Google 免费接口：准备翻译 ${textNodes.length} 个文本片段`);
+let completed = 0;
+
+await Promise.all(textNodes.map(textNode => googleTranslationSemaphore(async () => {
+if (shouldCancel) return;
+const originalText = textNode.textContent;
+const trimmedText = originalText.trim();
+const leadingSpace = originalText.match(/^\s*/)?.[0] || '';
+const trailingSpace = originalText.match(/\s*$/)?.[0] || '';
+const cached = getFromCache(trimmedText, sourceLang, targetLang);
+
+if (cached) {
+textNode.textContent = `${leadingSpace}${cached}${trailingSpace}`;
+completed++;
+return;
+}
+
+try {
+const translated = await translatePlainTextWithGoogle(trimmedText, sourceCode, targetCode);
+textNode.textContent = `${leadingSpace}${translated}${trailingSpace}`;
+addToCache(trimmedText, sourceLang, targetLang, translated);
+totalInputTokens += estimateTokens(trimmedText);
+totalOutputTokens += estimateTokens(translated);
+completed++;
+
+if (completed % 20 === 0 || completed === textNodes.length) {
+addLog(`Google 翻译进度: ${completed}/${textNodes.length} 个文本片段`);
+}
+} catch (error) {
+addLog(`Google 翻译片段失败，已保留原文: ${error.message}`, true);
+completed++;
+}
+})));
+
+updateTokenDisplay(true);
+const html = doc.documentElement ? doc.documentElement.outerHTML : text;
+return docType ? `${docType}\n${html}` : html;
+}
+
+async function translatePlainTextWithGoogle(text, sourceCode, targetCode) {
+if (text.length > 4500) {
+const chunks = splitTextForGoogle(text, 4500);
+const translatedChunks = [];
+for (const chunk of chunks) {
+translatedChunks.push(await translatePlainTextWithGoogle(chunk, sourceCode, targetCode));
+}
+return translatedChunks.join('');
+}
+
+const endpoint = 'https://translate.googleapis.com/translate_a/single';
+const params = new URLSearchParams({
+client: 'gtx',
+sl: sourceCode,
+tl: targetCode,
+dt: 't',
+q: text
+});
+
+let lastError = null;
+for (let attempt = 1; attempt <= 3; attempt++) {
+try {
+const response = await fetch(`${endpoint}?${params.toString()}`);
+
+if (!response.ok) {
+throw new Error(`请求失败: ${response.status}`);
+}
+
+const data = await response.json();
+const translated = Array.isArray(data?.[0])
+? data[0].map(part => part?.[0] || '').join('')
+: '';
+
+if (!translated.trim()) {
+throw new Error('接口返回空译文');
+}
+
+return translated.trim();
+}
+catch (error) {
+lastError = error;
+if (attempt < 3) {
+const delay = 800 * attempt;
+await new Promise(resolve => setTimeout(resolve, delay));
+}
+}
+}
+
+throw lastError || new Error('Google 翻译失败');
+}
+
+function splitTextForGoogle(text, maxLength) {
+const chunks = [];
+let remaining = text;
+
+while (remaining.length > maxLength) {
+let splitAt = Math.max(
+remaining.lastIndexOf('. ', maxLength),
+remaining.lastIndexOf('! ', maxLength),
+remaining.lastIndexOf('? ', maxLength),
+remaining.lastIndexOf('。', maxLength),
+remaining.lastIndexOf('！', maxLength),
+remaining.lastIndexOf('？', maxLength),
+remaining.lastIndexOf('\n', maxLength),
+remaining.lastIndexOf(' ', maxLength)
+);
+
+if (splitAt < maxLength * 0.5) {
+splitAt = maxLength;
+}
+
+chunks.push(remaining.slice(0, splitAt + 1));
+remaining = remaining.slice(splitAt + 1);
+}
+
+if (remaining) {
+chunks.push(remaining);
+}
+
+return chunks;
 }
 
 async function translateMetadata(text, sourceLang, targetLang) {
@@ -4453,6 +4675,13 @@ return `${docType}\n${doc.documentElement.outerHTML}`;
 }
 
 function updateProgress(status, percent) {
+if (isTranslating && window.LLM?.supports(translationService?.value) && status.startsWith('翻译中')) {
+const processed = Math.min(totalCharsToTranslate, totalSourceChars);
+percent = totalCharsToTranslate > 0 ? Math.min(99, processed / totalCharsToTranslate * 100) : 0;
+status = `翻译中... ${processed.toLocaleString()}/${totalCharsToTranslate.toLocaleString()} 字`;
+}
+window.LLM?.renderCompletion();
+percent = Math.max(0, Math.min(100, Number(percent) || 0));
 progressStatus.textContent = status;
 progressPercent.textContent = Math.round(percent) + '%';
 progressBar.style.width = percent + '%';
@@ -4461,8 +4690,14 @@ progressBar.style.width = percent + '%';
 function addLog(message, isError = false) {
 _logQueue.push({ message, isError });
 if (!_logRafId) {
-_logRafId = requestAnimationFrame(() => {
+_logRafId = requestAnimationFrame(flushLogs);
+}
+}
+
+function flushLogs() {
+if (_logRafId) cancelAnimationFrame(_logRafId);
 _logRafId = null;
+if (!progressLog) return;
 const fragment = document.createDocumentFragment();
 _logQueue.splice(0).forEach(({ message, isError }) => {
 const logEntry = document.createElement('div');
@@ -4472,8 +4707,6 @@ fragment.appendChild(logEntry);
 });
 progressLog.appendChild(fragment); // 一次 DOM 操作插入所有日志
 progressLog.scrollTop = progressLog.scrollHeight; // 一次滚动
-});
-}
 }
 
 async function handleDownload() {
@@ -4578,7 +4811,7 @@ alert('未找到可预览的内容');
 return;
 }
 
-currentPreviewPage = 0;
+currentPreviewPage = window.PreviewHelper.firstTextPage(previewPages);
 updatePreviewDisplay();
 
 // 显示预览模态框
@@ -4598,45 +4831,19 @@ const previewInfo = document.getElementById('previewInfo');
 const prevBtn = document.getElementById('prevPage');
 const nextBtn = document.getElementById('nextPage');
 
-// 使用 blob URL 显示内容，避免 srcdoc 的沙箱问题
+// Load a complete document rather than nesting an EPUB document inside another body.
 try {
-// 添加基本样式以确保预览效果
-const safeContent = `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            padding: 20px;
-            line-height: 1.6;
-        }
-        img {
-            max-width: 100%;
-            height: auto;
-        }
-    </style>
-</head>
-<body>
-    ${page.content}
-</body>
-</html>
-`;
-// 创建 blob URL
-const blob = new Blob([safeContent], { type: 'text/html' });
-const url = URL.createObjectURL(blob);
-previewContent.src = url;
-
-// 清理旧的 URL（如果有）
+previewContent.removeAttribute('src');
+previewContent.srcdoc = window.PreviewHelper.documentFor(page.content);
 if (previewContent.dataset.blobUrl) {
 URL.revokeObjectURL(previewContent.dataset.blobUrl);
+delete previewContent.dataset.blobUrl;
 }
-previewContent.dataset.blobUrl = url;
 } catch (error) {
 // 如果失败，显示错误信息
 console.error('预览加载失败:', error);
-previewContent.textContent = '预览内容加载失败: ' + error.message;
+previewContent.srcdoc = '<p>预览内容加载失败，请查看日志。</p>';
+addLog('预览内容加载失败: ' + error.message, true);
 }
 
 // 更新页面信息

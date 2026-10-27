@@ -74,6 +74,7 @@ store.put({ key, value, accessedAt: now });
 await new Promise((resolve, reject) => {
 tx.oncomplete = resolve;
 tx.onerror = () => reject(tx.error);
+tx.onabort = () => reject(tx.error || new Error('缓存写入事务已中止'));
 });
 } catch (e) {
 // 静默失败，不影响翻译
@@ -272,7 +273,30 @@ return { cacheCount: 0, progressCount: 0, quota: null };
 }
 
 // 导出为全局 API
+    async function getCacheEntries(keys) {
+        if (!keys.length) return new Map();
+try {
+const db = await openDB();
+return await new Promise((resolve, reject) => {
+const tx = db.transaction(STORE_CACHE, 'readonly');
+const store = tx.objectStore(STORE_CACHE);
+const values = new Map();
+for (const key of new Set(keys)) {
+const req = store.get(key);
+req.onsuccess = () => { if (req.result) values.set(key, req.result.value); };
+}
+tx.oncomplete = () => { for (const [key, value] of values) enqueueCacheWrite(key, value); resolve(values); };
+tx.onerror = () => reject(tx.error);
+tx.onabort = () => reject(tx.error || new Error('缓存读取事务已中止'));
+});
+} catch { return new Map(); }
+}
+async function getCacheEntry(key) {
+return (await getCacheEntries([key])).get(key);
+}
 window.Persistence = {
+getCacheEntry,
+getCacheEntries,
 computeFileId,
 preloadCache,
 enqueueCacheWrite,

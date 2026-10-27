@@ -19,3 +19,14 @@ npm-debug.log*
 # Environment variables
 .env
 .env.local
+
+# Local settings, generated book samples and review reports
+.claude/
+artifacts/
+__pycache__/
+*.pyc
+*.pid
+*.backup
+index_old_backup.html
+indexold.html
+index_v2.html
