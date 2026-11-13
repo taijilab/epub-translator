@@ -604,6 +604,7 @@ kimiBaseUrl: document.getElementById('kimiBaseUrl')?.value,
 kimiModel: document.getElementById('kimiModel')?.value,
 taotokenBaseUrl: document.getElementById('taotokenBaseUrl')?.value,
 taotokenModel: document.getElementById('taotokenModel')?.value,
+deepseekThinking: document.getElementById('deepseekThinking')?.checked === true,
 apiConcurrency: document.getElementById('apiConcurrency')?.value,
 apiRetryLimit: document.getElementById('apiRetryLimit')?.value,
 apiRepairBudget: document.getElementById('apiRepairBudget')?.value,
@@ -619,6 +620,8 @@ try {
 const saved = localStorage.getItem(STORAGE_KEY);
 if (saved) {
 const config = JSON.parse(saved);
+const thinkingInput = document.getElementById('deepseekThinking');
+if (thinkingInput) thinkingInput.checked = config.deepseekThinking === true;
 for (const id of ['kimiBaseUrl', 'kimiModel', 'taotokenBaseUrl', 'taotokenModel', 'apiConcurrency', 'apiRetryLimit', 'apiRepairBudget', 'apiRepairTokens']) {
 if (config[id] && document.getElementById(id)) document.getElementById(id).value = config[id];
 }

@@ -54,7 +54,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         if (behavior === 'metadata-invalid') return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(items.map(item=>({id:item.id})))},finish_reason:'stop'}]}));
         const content = JSON.stringify(behavior === 'invalid' ? translated.slice(1) : behavior === 'onebad' ? translated.filter(item => !item.text.includes('Bad fragment')) : behavior === 'duplicate' ? [...translated, translated.find(item => item.text.includes('Bad fragment'))] : behavior === 'empty' ? translated.map(item => item.text.includes('Bad fragment') ? {...item,text:''} : item) : behavior === 'badmarkers' ? translated.map(item => item.text.includes('Bad fragment') ? {...item,text:item.text.replace(/\[\[EPUB_TAG_\d+\]\]/,'')} : item) : translated);
-        return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: behavior === 'truncated' ? 'length' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 20 } }));
+        return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: (behavior === 'truncated' || (behavior === 'truncate-first' && calls === 1)) ? 'length' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 20 } }));
     };
     await test('ID mapping accepts reordered results', () => {
         const mapped = LLM.validateResult('[{"id":"b","text":"B"},{"id":"a","text":"A"}]', [{ id: 'a' }, { id: 'b' }]);
@@ -139,15 +139,48 @@ document.addEventListener('DOMContentLoaded', async () => {
         assert(previews.some(p => p.translated.includes('等待模型')) && previews.some(p => p.translated.includes('T:Text')), 'missing live comparison');
         assert(progressUpdates.length === 2 && progressUpdates.every(p => p.percent > 0 && p.percent <= 99), 'missing per-group progress');
     });
-    await test('DeepSeek Flash thinking is disabled for standard, enabled for refined', async () => {
-        document.getElementById('taotokenModel').value = 'deepseek-flash';
+    await test('DeepSeek Flash thinking is opt-in and frozen per run in every quality mode', async () => {
+        const toggle = document.getElementById('deepseekThinking');
         document.getElementById('taotokenBaseUrl').value = 'https://api.taotoken.net/v1';
-        for (const quality of ['standard', 'refined']) {
-            mode = quality; cache.clear(); LLM.begin('taotoken', 'en', 'zh');
-            await LLM.translate(fixture, 'en', 'zh', 'taotoken', context);
-            assert(payload.thinking.type === (quality === 'refined' ? 'enabled' : 'disabled'), 'wrong thinking mode');
+        for (const model of ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4.1-flash']) {
+            document.getElementById('taotokenModel').value = model;
+            for (const quality of ['quick', 'standard', 'refined']) for (const enabled of [false, true]) {
+                mode = quality; toggle.checked = enabled; cache.clear(); LLM.begin('taotoken', 'en', 'zh');
+                toggle.checked = !enabled;
+                await LLM.translate(fixture, 'en', 'zh', 'taotoken', context);
+                assert(payload.thinking.type === (enabled ? 'enabled' : 'disabled'), 'wrong thinking mode or mutable run settings');
+                assert(payload.messages[0].content.includes(`en-zh-${quality}-`), 'quality prompt changed');
+            }
         }
+        toggle.checked = false;
         mode = 'standard'; document.getElementById('taotokenModel').value = 'model-from-console';
+    });
+    await test('DeepSeek batches cap fragments and scale output budgets', async () => {
+        begin(); behavior = 'success'; calls = 0;
+        document.getElementById('taotokenModel').value = 'deepseek-v4-flash';
+        document.getElementById('deepseekThinking').checked = false;
+        LLM.begin('taotoken', 'en', 'zh');
+        const html = `<html><body>${Array.from({length: 33}, (_, i) => `<p>Batch ${i}</p>`).join('')}</body></html>`;
+        await LLM.translate(html, 'en', 'zh', 'taotoken', context);
+        assert(calls === 3 && requests.every(r => JSON.parse(r.messages[1].content).length <= 16), 'oversized batch');
+        assert(requests[2].max_tokens < requests[0].max_tokens && requests.every(r => r.max_tokens <= 8000), 'output budget did not scale');
+    });
+    await test('Split repairs run before queued original groups with shared concurrency', async () => {
+        begin(); behavior = 'truncate-first'; calls = 0;
+        document.getElementById('apiConcurrency').value = '1';
+        const html = `<html><body>${Array.from({length: 70}, (_, i) => `<p>Priority ${i}</p>`).join('')}</body></html>`;
+        await LLM.translate(html, 'en', 'zh', 'kimi', context);
+        assert(history[0].length === 32 && history[1].length === 16 && history[2].length === 16, 'repair waited behind original groups');
+        assert(LLM.failureCount() === 0 && calls === 5, 'repair lost output');
+        document.getElementById('apiConcurrency').value = '2'; behavior = 'success';
+    });
+    await test('Budget rejection reports its limit without logging a sent request', async () => {
+        begin(); behavior = 'onebad'; calls = 0; capturedLogs.length = 0;
+        document.getElementById('apiRepairTokens').value = '0';
+        await LLM.translate('<html><body><p>Bad fragment</p></body></html>', 'en', 'zh', 'kimi', context);
+        assert(calls === 1 && capturedLogs.filter(l => l.includes('开始请求')).length === 1, 'unsent request logged as started');
+        assert(capturedLogs.some(l => l.includes('Token 预留') && l.includes('未发送请求')), 'budget reason missing');
+        behavior = 'success';
     });
     await test('Streamed Chinese text appears before final validation and usage is billed', async () => {
         behavior = 'stream'; previews.length = 0; cache.clear();
@@ -743,6 +776,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         NamedTerms.importTerms(name,NamedTerms.parseImport(JSON.stringify([{source,target:'字面量'}]),name)); NamedTerms.flush();
         assert(!document.getElementById('termsRows').querySelector('img') && document.getElementById('termsRows').textContent.includes(source),'untrusted import rendered as HTML');
     }));
+    await test('Review normalizes full-width digits and preserved foreign quotations', () => {
+        assert(JSON.stringify(TranslationQuality.numbers('２０２６年３月３１日')) === JSON.stringify(TranslationQuality.numbers('2026年3月31日')), 'full-width digits differ');
+        const quote='Reisque dele crimna Reisque dele crimna';
+        assert(!TranslationQuality.check(quote, quote, {sourceLang:'ja',targetLang:'zh'}).some(f=>['english','untranslated'].includes(f.code)), 'preserved quotation flagged');
+        assert(TranslationQuality.check('彼は戻った。', '他 afterwards 回来了。', {targetLang:'zh'}).some(f=>f.code==='english'), 'new foreign word missed');
+        assert(TranslationQuality.check('３人', '4人', {targetLang:'zh'}).some(f=>f.code==='numbers'), 'changed number missed');
+    });
     const failed = results.filter(line => line.startsWith('FAIL')).length;
     document.getElementById('results').textContent += `\n${results.length - failed}/${results.length} passed`;
 });

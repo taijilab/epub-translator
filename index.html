@@ -8,9 +8,9 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="js/persistence.js?v=quality-v5"></script>
     <script src="js/epub-order.js?v=context-v6"></script>
-    <script src="js/app.js?v=terms-v7"></script>
-    <script src="js/quality.js?v=quality-v5"></script>
-    <script src="js/llm.js?v=context-v6"></script>
+    <script src="js/app.js?v=thinking-v7"></script>
+    <script src="js/quality.js?v=review-v9"></script>
+    <script src="js/llm.js?v=review-v9"></script>
     <script src="js/preview.js?v=validated-v4"></script>
     <script src="js/terms.js?v=terms-v7"></script>
     <script src="js/blocks.js?v=page-anchors-v1"></script>
@@ -380,6 +380,10 @@
                         <button id="kimiTestBtn" type="button" class="border border-gray-300 rounded-lg px-4 py-2">测试连接</button>
                         <span id="kimiTestStatus" role="status" class="text-sm"></span>
                     </div>
+                    <label class="block text-sm text-gray-700">
+                        <input id="deepseekThinking" type="checkbox" class="mr-2">开启深度思考（TaoToken DeepSeek Flash，耗时更长）
+                        <span class="block text-xs text-gray-500 mt-1">默认关闭；精翻仍保留翻译与自我审校要求。修改后于下次翻译生效。</span>
+                    </label>
                     <label class="block text-sm font-medium text-gray-700">API 并发请求数
                         <input id="apiConcurrency" type="number" min="1" max="10" value="3" class="w-24 border border-gray-300 rounded-lg p-2 ml-2">
                     </label>
